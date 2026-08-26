@@ -1,12 +1,12 @@
-# Mutational cold-spot detection in disordered protein regions
+# Mutational coldspot detection
 
-Detection and evaluation of **mutational cold spots** — contiguous protein
+Detection and evaluation of **mutational coldspots** — contiguous protein
 regions depleted of pathogenic variation — using a two-state Gaussian hidden
 Markov model over variant-effect-predictor and conservation scores.
 
 Model parameters are estimated once, in closed form, from a single labelled
 region in **BRCA1**, then applied unchanged to every other gene. BRCA1 is
-excluded from all evaluation. Predicted cold spots are assessed against
+excluded from all evaluation. Predicted coldspots are assessed against
 (1) ClinVar clinical significance and (2) multiplexed assay of variant effect
 (MAVE) functional calls.
 
