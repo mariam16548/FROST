@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coldspots"
+version = "1.0.0"
+description = "Mutational cold-spot detection in disordered protein regions via a two-state HMM"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "TODO: author name", email = "TODO@example.org"}]
+keywords = ["variant effect prediction", "hidden markov model", "BRCA1", "MAVE"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Programming Language :: Python :: 3",
+]
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "scikit-learn>=1.2",
+  "hmmlearn>=0.3.0",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+coldspots = "coldspots.cli:main"
+
+[project.urls]
+Repository = "https://github.com/TODO/TODO"
+
+[tool.setuptools]
+packages = ["coldspots"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

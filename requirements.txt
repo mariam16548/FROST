@@ -1,0 +1,11 @@
+# Versions used for the published run. Pinned for reproducibility.
+# Loosen at your own risk: hmmlearn's Gaussian API has changed across minors.
+numpy==2.4.4
+pandas==3.0.2
+scipy==1.17.1
+scikit-learn==1.8.0
+hmmlearn==0.3.3
+PyYAML==6.0.2
+
+# Development only
+pytest==8.3.4

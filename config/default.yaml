@@ -1,0 +1,66 @@
+# Configuration for the published cold-spot analysis.
+# Every parameter used by the pipeline is declared here. Change the paths to
+# point at your own copies of the input tables; leave the rest untouched to
+# reproduce the primary analysis.
+
+data:
+  # Collapsed per-residue VEP table: one row per (gene_symbol, aa_pos).
+  # Used for HMM parameter training and for cold-spot detection.
+  vep_residue_csv: data/VEP_scores_with_plddt13_with_08_2026_clinvar.csv
+  # Expanded variant-level table: one row per nucleotide-level variant, with
+  # both ClinVar and MAVE calls already merged in.
+  # Used for BOTH the ClinVar and the MAVE evaluation.
+  vep_expanded_csv: data/VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv
+
+columns:
+  clinvar: new_CLNSIG_simple
+  mave: ExC_assignment
+  # Fallbacks tried in order if `mave` is absent; the resolved name is recorded
+  # in the run manifest.
+  mave_candidates:
+    - ExC_assignment
+    - assignment
+    - mave_assignment
+    - MAVE_assignment
+    - mave_class
+    - MAVE_class
+  gene_residue: gene_symbol
+  gene_expanded: gene_symbol
+  aa_pos: aa_pos
+  # Dropped on load so that membership is always recomputed from this run.
+  drop_precomputed: [in_coldspot, in_coldspot_bw]
+
+features:
+  # Order matters: the first feature defines which HMM state is "cold".
+  primary: [am_pathogenicity, ESM1B_score, max_EVE, phyloP100way]
+  # Marginalised out to build the fallback model for genes lacking these scores.
+  fallback_drop: [max_EVE]
+  # Sign-flipped so that higher == more damaging for every feature.
+  invert: [ESM1B_score]
+  winsorize: [1.0, 99.0]
+
+training:
+  # Amino-acid intervals labelled cold when estimating parameters.
+  intervals:
+    BRCA1: [[224, 1366]]
+  # Never decoded; removed from both evaluation sets.
+  exclude_genes: [BRCA1]
+
+detection:
+  min_cold_run: 40
+
+evaluation:
+  min_class_count: 0        # 0 = no ClinVar gene filter
+  min_mave_positions: 10
+  min_mave_coverage: 0.0    # 0 = off
+  mave_filter_level: gene   # gene | interval
+  unit: variant             # variant (primary) | position (sensitivity)
+  clinvar_labels: {PLP: PLP, BLB: BLB, VUS: VUS}
+  mave_labels: {PLP: PLP, BLB: BLB, IR: IR}
+
+output:
+  dir: results
+  prefix: coldspots
+  write_pickle: true
+
+seed: 42
