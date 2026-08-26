@@ -10,27 +10,13 @@ to rebuild them, and records the versions used.
 
 ## Obtaining the data
 
-| Component | Source | Version / release used | Access |
-| --- | --- | --- | --- |
-| AlphaMissense (`am_pathogenicity`) | [source + citation] | [version] | [URL / terms] |
-| ESM1b (`ESM1B_score`) | [source + citation] | [version] | [URL / terms] |
-| EVE (`max_EVE`) | [source + citation] | [version] | [URL / terms] |
-| phyloP 100-way (`phyloP100way`) | [source + citation] | [version] | [URL / terms] |
-| AlphaFold pLDDT (`plddt`) | [source + citation] | [version] | [URL / terms] |
-| ClinVar (`new_CLNSIG_simple`) | ClinVar | **August 2026 release** (per the original filenames) | public FTP |
-| MAVE calls (`ExC_assignment`) | [source, e.g. specific MAVEdb / consortium release] | [version] | [URL / terms] |
+Both input tables are archived on Zenodo:
 
-If the tables are deposited (Zenodo, figshare, dbGaP, EGA), record the DOI or
-accession here and the exact filenames:
+doi:10.5281/zenodo.22106323
 
-```
-Deposited at: [DOI or accession]
-  VEP_scores_with_plddt13_with_08_2026_clinvar.csv                     [md5]
-  VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv       [md5]
-```
+VEP_scores_with_plddt13_with_08_2026_clinvar.csv                  
+VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv    
 
-Checksums matter: they let a reader confirm they have the same tables the paper
-used. Generate them with `md5sum` (or `shasum -a 256`) and paste them above.
 
 ## Table 1 — collapsed per-residue table
 
