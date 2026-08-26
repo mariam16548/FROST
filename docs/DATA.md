@@ -14,8 +14,8 @@ Both input tables are archived on Zenodo:
 
 doi:10.5281/zenodo.22106323
 
-VEP_scores_with_plddt13_with_08_2026_clinvar.csv                  
-VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv    
+`VEP_scores_with_plddt13_with_08_2026_clinvar.csv`            
+`VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv`    
 
 
 ## Table 1 — collapsed per-residue table
