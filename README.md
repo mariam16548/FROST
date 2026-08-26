@@ -34,7 +34,6 @@ python -m coldspots.cli --config config/synthetic.yaml
 python -m coldspots.cli --config config/default.yaml
 ```
 
-Run the tests with `pytest`.
 
 ---
 
@@ -55,19 +54,11 @@ config/
   default.yaml    The published primary analysis.
   sensitivity_position_level.yaml
                   Pseudo-replication control (see Caveats).
-  synthetic.yaml  Smoke test on generated data.
-scripts/
-  make_synthetic_data.py
-                  Generates schema-faithful fake inputs.
+
 docs/
   METHODS.md      Full method description, in prose, with the statistics.
   DATA.md         Input schemas and how to obtain the real tables.
-  CHANGES_FROM_ORIGINAL.md
-                  Every difference from the original analysis script.
-legacy/
-  original_pipeline.py
-                  The script as run for the paper, unmodified, for reference.
-tests/            Unit and end-to-end tests.
+
 ```
 
 ---
