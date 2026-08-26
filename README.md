@@ -12,7 +12,7 @@ excluded from all evaluation. Predicted coldspots are assessed against
 
 This repository contains the code accompanying:
 
-> *[Author list]. [Title]. [Journal / preprint], [year]. doi:[DOI]*
+> *[preprint citation]*
 
 ---
 
