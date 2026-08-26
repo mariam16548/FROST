@@ -1,4 +1,4 @@
-# Mutational coldspot detection
+# Find Regions of Substition Tolerance (FROST)
 
 Detection and evaluation of **mutational coldspots** — contiguous protein
 regions depleted of pathogenic variation — using a two-state Gaussian hidden
