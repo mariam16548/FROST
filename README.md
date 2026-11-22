@@ -207,7 +207,9 @@ numbers are read correctly.
    treats the residues on either side of a gap as neighbours, so an interval
    can span a gap. `length` is the amino-acid span; `n_residues_scored` is
    the number of scored residues inside it. In the released table 0.5% of
-   positions are absent, and 430 of 2,729 cold spots span at least one gap.
+   positions are absent, mostly residues whose variants were all removed by
+   the filter that excludes variants affecting splicing; 430 of 2,729 cold
+   spots span at least one such gap.
 6. **`frac_assayed` should accompany any depletion claim.** A region can clear
    the MAVE threshold on a handful of clustered residues at one edge while most
    of it is unassayed.

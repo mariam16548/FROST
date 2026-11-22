@@ -104,9 +104,11 @@ the input table are simply not observed: the HMM treats the residues on either
 side of a gap as adjacent, so an interval may span a gap and contain fewer
 scored residues than its length. The count is reported as
 `n_residues_scored`. In the released table 0.5% of positions within gene
-spans are absent (including position 1 of every gene), and 430 of the 2,729
-cold spots span at least one gap, accounting for 0.3% of total cold-spot
-length.
+spans are absent (including position 1 of every gene). The gaps arise mainly
+because variants that affect splicing were filtered out of the table, which
+removes every row for residues where all candidate substitutions are
+splice-affecting. 430 of the 2,729 cold spots span at least one gap,
+accounting for 0.3% of total cold-spot length.
 
 ## 6. Evaluation
 
