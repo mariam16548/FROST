@@ -1,46 +1,48 @@
-# Obtaining the data
+# The input table
 
-Both input tables are archived on Zenodo:
+FROST needs one file, archived on Zenodo under CC BY 4.0:
 
-doi:10.5281/zenodo.22106323
+**[doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228)** —
+`variant_level_coldspots.csv.gz`
 
-`VEP_scores_with_plddt13_with_08_2026_clinvar.csv`            
-`VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv`    
+Download it into `data/` in the repository (the path `config/default.yaml`
+expects), or point the pipeline at it with
+`--variant-csv /path/to/variant_level_coldspots.csv.gz`. The file is read
+directly; there is no need to decompress it.
 
-## Table 1 — collapsed per-residue table
+The released table has 12,849,029 rows covering 2,749 genes (one transcript
+per gene) and 2,255,310 residues.
 
-Config key `data.vep_residue_csv`; archived as `VEP_scores_with_plddt13_with_08_2026_clinvar.csv`. 
-One row per (gene, amino-acid position). Used for parameter estimation and coldspot detection — not for evaluation.
+## Schema
 
-| Column | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `gene_symbol` | str | yes | HGNC symbol |
-| `aa_pos` | int | yes | 1-based amino-acid position |
-| `am_pathogenicity` | float | yes | higher = more damaging |
-| `ESM1B_score` | float | yes | **more negative = more damaging**; sign-flipped by the pipeline |
-| `max_EVE` | float | no | may be missing for an entire gene, which routes it to the marginalised model |
-| `phyloP100way` | float | yes | higher = more conserved |
-| `plddt` | float | no | carried through; not used by the model |
+One row per missense substitution. Columns used by the pipeline are marked;
+the rest are carried for annotation and ignored.
 
-A gene missing any of `am_pathogenicity`, `ESM1B_score`, `phyloP100way` at any
-position is not decoded. `max_EVE` missingness is handled per gene, not per
-residue: a gene is routed to the marginalised model only if it lacks EVE
-entirely.
+| Column | Used | Notes |
+| --- | --- | --- |
+| `gene_symbol` | yes | HGNC symbol |
+| `protein_variant` | yes | e.g. `C2R`; the amino-acid position (`2`) is parsed from it. A table may supply an integer `aa_pos` column instead |
+| `max_AlphaMissense` | yes | per-residue maximum AlphaMissense; higher = more damaging |
+| `min_ESM1b` | yes | per-residue minimum ESM1b; **more negative = more damaging**, sign-flipped by the pipeline |
+| `max_EVE` | yes | per-residue maximum EVE; may be missing — a gene with any missing value uses the 3-feature model |
+| `max_phyloP` | yes | per-residue maximum phyloP; higher = more conserved |
+| `CLNSIG` | yes | ClinVar: `PLP`, `BLB`, `VUS`, or empty |
+| `functional_assignment` | yes | MAVE call: `Abnormal` (counted as PLP), `Normal` (BLB), `Indeterminate` (IR), or empty |
+| `transcript_id`, `pLDDT`, `AlphaMissense`, `REVEL`, `MutPred2`, `pfam_domain` | no | annotation |
+| `gene_has_coldspot`, `variant_in_coldspot` | **never read** | the published calls, for convenience; the pipeline recomputes membership and reproduces both columns exactly |
 
-## Table 2 — expanded variant-level table
+The four predictor columns are per-residue summaries, so they repeat across
+the substitutions at a residue. The pipeline checks this and stops with an
+error if a residue carries different values. A gene with any missing
+`max_AlphaMissense`, `min_ESM1b` or `max_phyloP` value is not decoded (none
+are in the released table).
 
-Config key `data.vep_expanded_csv`; archived as `VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv`. 
-One row per nucleotide-level variant. Used for both evaluations — not for detection.
+Because there is one row per substitution, a residue can carry several
+ClinVar or MAVE calls. This is what makes the counting-unit distinction in
+`evaluation.unit` necessary; see [METHODS.md §6.5](METHODS.md).
 
-| Column | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `gene_symbol` | str | yes | must match Table 1 |
-| `aa_pos` | int | yes | must match Table 1's coordinate system |
-| `new_CLNSIG_simple` | str | yes | `PLP`, `BLB`, `VUS`, or missing |
-| `ExC_assignment` | str | yes | `PLP`, `BLB`, `IR`, or missing |
-| `in_coldspot`, `in_coldspot_bw` | bool | no | **dropped on load** — membership is always recomputed |
+## Using a different table
 
-Several rows may share an `aa_pos` (one per codon change). This is what makes
-the counting-unit distinction in `evaluation.unit` necessary; see
-[METHODS.md §6.5](METHODS.md).
-
+Column names and label wording are set in the config (`columns.*`,
+`features.*`, `evaluation.clinvar_labels`, `evaluation.mave_labels`), so a
+table with other names can be used without changing code.

@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Data and results (the input table is on Zenodo; see docs/DATA.md)
+data/
+results/
+
+# OS
+.DS_Store

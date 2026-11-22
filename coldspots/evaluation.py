@@ -1,6 +1,6 @@
 """Cold-spot evaluation: membership, enrichment, odds ratios.
 
-Two independent evaluations run against the same expanded (variant-level)
+Two independent evaluations run against the same variant-level input
 table:
 
 * **ClinVar** - uses the clinical significance column, over the full cold-spot
@@ -19,8 +19,8 @@ import pandas as pd
 from scipy.stats import fisher_exact
 
 __all__ = [
-    "odds_ratio", "coldspot_inclusion", "filter_by_mave_support",
-    "evaluate",
+    "odds_ratio", "in_intervals", "coldspot_inclusion",
+    "filter_by_mave_support", "evaluate",
 ]
 
 NA = float("nan")
@@ -71,42 +71,68 @@ def _collapse_to_positions(df: pd.DataFrame, gene_col: str, aa_col: str,
                            label_col: str) -> pd.DataFrame:
     """One row per (gene, aa_pos, label) - the pseudo-replication control.
 
-    The expanded table holds one row per nucleotide-level variant, so a single
-    residue with several codon changes contributes several rows and Fisher's
-    exact test treats them as independent. Collapsing removes that inflation.
-    A position with both a PLP and a BLB call is retained once per label.
+    The input table holds one row per substitution, so a residue with several
+    classified substitutions contributes several rows and Fisher's exact test
+    treats them as independent. Collapsing removes that inflation. A position
+    with both a PLP and a BLB call is retained once per label.
     """
     return df.drop_duplicates(subset=[gene_col, aa_col, label_col])
+
+
+def in_intervals(df: pd.DataFrame, intervals_df: pd.DataFrame, *,
+                 gene_col: str, aa_col: str) -> np.ndarray:
+    """Boolean mask: is each row's (gene, aa_pos) inside any interval?
+
+    Endpoints are inclusive. Vectorised with one ``searchsorted`` per gene, so
+    it scales linearly with the number of rows. Overlapping intervals are
+    handled (the running maximum of interval ends is used), although the
+    intervals produced by decoding never overlap within a gene.
+    """
+    mask = np.zeros(len(df), dtype=bool)
+    if len(df) == 0 or intervals_df is None or intervals_df.empty:
+        return mask
+    pos_all = df[aa_col].to_numpy(dtype=float)
+    row_groups = df.groupby(gene_col, sort=False).indices
+    for gene, iv in intervals_df.groupby("gene", sort=False):
+        rows = row_groups.get(gene)
+        if rows is None:
+            continue
+        iv = iv.sort_values("aa_start")
+        starts = iv["aa_start"].to_numpy(dtype=float)
+        ends = np.maximum.accumulate(iv["aa_end"].to_numpy(dtype=float))
+        pos = pos_all[rows]
+        k = np.searchsorted(starts, pos, side="right") - 1
+        hit = k >= 0
+        hit[hit] = pos[hit] <= ends[k[hit]]
+        mask[rows] = hit
+    return mask
 
 
 def coldspot_inclusion(*, source_df: pd.DataFrame, coldspot_df: pd.DataFrame,
                        gene_col: str, aa_col: str, label_col: str,
                        label_map: dict[str, str],
-                       unit: str = "variant") -> dict:
+                       unit: str = "variant",
+                       exclude_df: pd.DataFrame | None = None) -> dict:
     """Count labelled observations inside vs. outside the predicted cold spots.
 
     Only genes carrying at least one cold spot contribute; a gene with no
     predicted cold spot has no inside/outside contrast to offer.
+
+    ``exclude_df`` lists intervals whose positions are removed from **both**
+    cells before counting. It is used by the interval-level MAVE evaluation:
+    a cold spot that fails the assay-support filter is neither "inside" (it was
+    not retained) nor "outside" (it is still a predicted cold spot), so its
+    variants must not be counted at all.
     """
     coldspot_genes = set(coldspot_df["gene"].unique())
-    src = source_df[source_df[gene_col].isin(coldspot_genes)].copy()
+    src = source_df[source_df[gene_col].isin(coldspot_genes)]
+    if exclude_df is not None and not exclude_df.empty:
+        drop = in_intervals(src, exclude_df, gene_col=gene_col, aa_col=aa_col)
+        src = src[~drop]
     if unit == "position":
         src = _collapse_to_positions(src, gene_col, aa_col, label_col)
-
-    intervals = (
-        coldspot_df.groupby("gene")[["aa_start", "aa_end"]]
-        .apply(lambda x: list(zip(x["aa_start"], x["aa_end"])))
-        .to_dict()
-    )
-
-    def _inside(row) -> bool:
-        return any(a <= row[aa_col] <= b
-                   for a, b in intervals.get(row[gene_col], []))
-
-    src["_in_coldspot"] = (
-        src.apply(_inside, axis=1) if len(src)
-        else pd.Series(dtype=bool)
-    )
+    src = src.assign(_in_coldspot=in_intervals(
+        src, coldspot_df, gene_col=gene_col, aa_col=aa_col))
 
     summary = {}
     for canon, raw in label_map.items():
@@ -128,9 +154,10 @@ def filter_by_mave_support(coldspot_df: pd.DataFrame, mave_df: pd.DataFrame, *,
     """Keep cold spots with enough functional-assay evidence to interpret.
 
     "Enough" means at least ``min_count`` **distinct aa positions** carrying a
-    call in ``valid_labels``, and optionally at least ``min_coverage`` of the
-    region assayed at all. Positions are deduplicated before counting because
-    the expanded table has one row per nucleotide change.
+    call in ``valid_labels`` (the raw labels for PLP and BLB, in that order),
+    and optionally at least ``min_coverage`` of the region assayed at all.
+    Positions are deduplicated before counting because the input table has
+    one row per substitution.
 
     ``level="interval"``
         every cold spot must clear the threshold on its own.
@@ -172,7 +199,8 @@ def filter_by_mave_support(coldspot_df: pd.DataFrame, mave_df: pd.DataFrame, *,
             .unstack(fill_value=0)
             .reindex(columns=list(valid_labels), fill_value=0)
     )
-    counts.columns = [f"n_{lbl}" for lbl in counts.columns]
+    canon = {raw: name for name, raw in zip(("PLP", "BLB"), valid_labels)}
+    counts.columns = [f"n_{canon.get(lbl, lbl)}" for lbl in counts.columns]
     counts["n_positions"] = hits.groupby("_orig_idx")[pos_col].nunique()
 
     # Assay coverage: any MAVE call at all, whatever the label.
@@ -224,7 +252,7 @@ def evaluate(coldspot_df: pd.DataFrame, clinvar_df: pd.DataFrame,
         return None
 
     cols, ev = cfg.columns, cfg.evaluation
-    gene_col, pos_col = cols.gene_expanded, cols.aa_pos
+    gene_col, pos_col = cols.gene, cols.aa_pos
 
     cv = coldspot_inclusion(
         source_df=clinvar_df, coldspot_df=coldspot_df,
@@ -237,16 +265,22 @@ def evaluate(coldspot_df: pd.DataFrame, clinvar_df: pd.DataFrame,
         min_count=ev.min_mave_positions, min_coverage=ev.min_mave_coverage,
         level=ev.mave_filter_level, label_col=mave_col,
         gene_col=gene_col, pos_col=pos_col,
+        valid_labels=(ev.mave_labels["PLP"], ev.mave_labels["BLB"]),
     )
     if cs_mave.empty:
         mv = {lbl: {"inside": 0, "total": 0, "rate": NA}
               for lbl in ev.mave_labels}
         or_mv = {"OR": NA, "OR_lo": NA, "OR_hi": NA, "p": NA, "table": None}
     else:
+        # Cold spots that failed the support filter in a gene that still has
+        # a passing one (only possible with level="interval"): drop their
+        # variants from both cells rather than counting them as "outside".
+        failed = coldspot_df.loc[~coldspot_df.index.isin(cs_mave.index)]
+        failed = failed[failed["gene"].isin(set(cs_mave["gene"]))]
         mv = coldspot_inclusion(
             source_df=mave_df, coldspot_df=cs_mave,
             gene_col=gene_col, aa_col=pos_col, label_col=mave_col,
-            label_map=ev.mave_labels, unit=ev.unit,
+            label_map=ev.mave_labels, unit=ev.unit, exclude_df=failed,
         )
         or_mv = odds_ratio(mv)
 

@@ -1,4 +1,4 @@
-"""Cold-spot detection in disordered protein regions via a two-state HMM."""
+"""FROST: mutational cold-spot detection with a two-state Gaussian HMM."""
 from .config import Config, load_config
 from .pipeline import run, load_data, detect
 

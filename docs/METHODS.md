@@ -6,26 +6,27 @@ a manuscript methods section. Section numbers correspond to modules in
 
 ## 1. Inputs
 
-Two tables (schemas in [DATA.md](DATA.md)):
+A single **variant-level table** (schema in [DATA.md](DATA.md)) with one row
+per missense substitution, carrying four per-residue predictor scores, the
+ClinVar clinical significance, and the MAVE functional call.
 
-* a **collapsed per-residue table**, one row per (gene, amino-acid position),
-  carrying the four predictor scores;
-* an **expanded variant-level table**, one row per nucleotide-level variant,
-  carrying ClinVar clinical significance and MAVE functional calls.
+Training and detection run on a **per-residue table** derived from it by
+keeping one row per (gene, amino-acid position); the predictor scores are
+per-residue summaries, so this loses nothing, and the pipeline verifies that
+they do not vary within a residue. Both evaluations run on the
+substitution-level rows, so several pathogenic or benign calls at the same
+amino-acid position each contribute.
 
-Detection runs on the collapsed table. Both evaluations run on the expanded
-table. There is no separate MAVE file — functional calls are already merged
-into the expanded table, so multiple pathogenic or benign calls at the same
-amino-acid position each contribute to both evaluations.
-
-Training genes (`training.exclude_genes`, default BRCA1) are removed from the
-expanded table before either evaluation.
+Precomputed membership columns shipped with the table (`variant_in_coldspot`,
+`gene_has_coldspot`) are never read. Training genes
+(`training.exclude_genes`, default BRCA1) are removed before either
+evaluation.
 
 ## 2. Feature preparation
 
-Four features are used: AlphaMissense pathogenicity (`am_pathogenicity`),
-ESM1b (`ESM1B_score`), EVE (`max_EVE`), and phyloP 100-way conservation
-(`phyloP100way`).
+Four per-residue features are used: AlphaMissense pathogenicity
+(`max_AlphaMissense`), ESM1b (`min_ESM1b`), EVE (`max_EVE`), and phyloP
+conservation (`max_phyloP`).
 
 ESM1b is sign-flipped so that larger values indicate greater predicted damage
 for every feature. Each feature vector is then winsorised at its 1st and 99th
@@ -42,8 +43,9 @@ interpretability on an absolute scale.
 
 Genes are partitioned by score availability. Genes with complete values for all
 four features are decoded with the full model; genes complete for the other
-three but entirely missing EVE are decoded with the marginalised model
-(§4). Genes missing any of the remaining three are not decoded.
+three but missing **any** EVE value (entirely or partly) are decoded with the
+marginalised model (§4), ignoring EVE for the whole gene. Genes missing any
+value of the remaining three are not decoded; the run log reports how many.
 
 ## 3. Model and parameter estimation
 
@@ -62,13 +64,15 @@ the remainder of the protein labelled hot:
 * **Transitions.** Adjacent-residue transition counts with add-one (Laplace)
   smoothing, row-normalised.
 
-State indices are ordered so that state 0 has the lower mean on the first
-feature. There is **no EM step**: the model is constructed with `n_iter=0` and
+State 0 is the labelled state. If the labelled region does not have the
+lower mean on the first feature (after orientation), it cannot be the cold
+state and training stops with an error rather than relabelling the states.
+There is **no EM step**: the model is constructed with `n_iter=0` and
 `params=""`, so `hmmlearn` performs decoding only. A training interval that
 does not overlap the gene's observed position range raises an error rather than
 being silently clamped to the terminal residue.
 
-## 4. Marginalisation for genes lacking EVE
+## 4. Marginalisation for genes with missing EVE
 
 Rather than fitting a second model on three features, the trained
 four-dimensional Gaussian is **marginalised** onto the three retained
@@ -85,7 +89,8 @@ its cold state means the same thing.
 
 For each gene outside the training set:
 
-1. drop residues with any missing feature value and sort by position;
+1. take the gene's residues, sorted by position (genes reaching this step
+   have no missing feature values);
 2. skip the gene if fewer than `2 × min_cold_run` (default 80) scored residues
    remain — a protein that short cannot support a cold/hot contrast at this
    resolution;
@@ -94,9 +99,14 @@ For each gene outside the training set:
    acids;
 5. emit closed intervals `[aa_start, aa_end]`.
 
-`length` is `aa_end - aa_start + 1`, an amino-acid span. Because unscored
-residues were dropped in step 1, an interval may contain fewer scored residues
-than its length; the count is reported as `n_residues_scored`.
+`length` is `aa_end - aa_start + 1`, an amino-acid span. Residues absent from
+the input table are simply not observed: the HMM treats the residues on either
+side of a gap as adjacent, so an interval may span a gap and contain fewer
+scored residues than its length. The count is reported as
+`n_residues_scored`. In the released table 0.5% of positions within gene
+spans are absent (including position 1 of every gene), and 430 of the 2,729
+cold spots span at least one gap, accounting for 0.3% of total cold-spot
+length.
 
 ## 6. Evaluation
 
@@ -122,15 +132,18 @@ filter.
 
 ### 6.3 MAVE evaluation
 
-Runs over the same expanded table, keyed on the functional-call column, and is
+Runs over the same table, keyed on the functional-call column, and is
 restricted to cold spots with enough assay support: at least
 `min_mave_positions` (default 10) **distinct amino-acid positions** carrying a
 PLP or BLB functional call. Positions are deduplicated before counting, since
-the expanded table holds one row per nucleotide change.
+the table holds one row per substitution.
 
 `mave_filter_level` controls how the threshold is applied:
 
-* `interval` — each cold spot must clear the threshold on its own;
+* `interval` — each cold spot must clear the threshold on its own. Variants
+  in a cold spot that fails are removed from **both** cells of the table
+  below: they are neither inside a retained cold spot nor outside every
+  predicted one;
 * `gene` (published default) — the threshold applies to the **sum** across a
   gene's cold spots, and every cold spot in a passing gene is retained,
   including those with few or no assayed positions. Cold spots within a gene
@@ -172,8 +185,8 @@ argues against pathogenicity.
 `evaluation.unit` sets what counts as one observation.
 
 * `variant` (published primary analysis) — one observation per row of the
-  expanded table. A residue with several codon changes contributes several
-  observations. Since those observations share a residue and are not
+  table, i.e. per substitution. A residue with several classified
+  substitutions contributes several observations. Since those observations share a residue and are not
   independent, Fisher's exact test overstates the effective sample size and
   p-values are anti-conservative.
 * `position` — the table is collapsed to one observation per (gene, position,
@@ -181,14 +194,20 @@ argues against pathogenicity.
   retained once per label.
 
 `config/sensitivity_position_level.yaml` runs the position-level analysis
-together with `mave_filter_level: interval`. Reporting both, and quoting the
-position-level p-value as the conservative bound, is strongly recommended.
+together with `mave_filter_level: interval`. Reporting both is strongly
+recommended. Collapsing to positions removes the duplication within a residue
+but not two other sources of anti-conservatism: residues within a contiguous
+region are spatially autocorrelated, and pooling all genes into one 2×2 table
+ignores between-gene differences in baseline rates. A gene-stratified test
+(e.g. Cochran–Mantel–Haenszel) or a permutation test that re-places intervals
+within each gene would give a more defensible p-value.
 
 ## 7. Determinism
 
 Nothing in the pipeline is stochastic. Parameters are estimated in closed form,
 Viterbi decoding is exact, and no bootstrap or permutation step is used. The
 RNG seed is set and recorded for completeness but does not affect any output;
-`tests/test_model.py::test_decoding_is_deterministic` asserts this. Given
+`tests/test_model.py::test_decoding_is_deterministic` and
+`tests/test_pipeline.py::test_two_runs_give_identical_files` assert this. Given
 identical input tables and config, two runs produce byte-identical interval and
 metrics files.

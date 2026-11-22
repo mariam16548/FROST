@@ -50,7 +50,5 @@ def prep_scores(scores: np.ndarray, name: str, *,
 
 def complete_genes(df: pd.DataFrame, cols: list[str], gene_col: str) -> set[str]:
     """Genes with no missing values in every column of ``cols``."""
-    grouped = df.groupby(gene_col)[cols].apply(
-        lambda x: bool(x.notna().all().all())
-    )
-    return set(grouped[grouped].index)
+    complete = df[cols].notna().all(axis=1).groupby(df[gene_col]).all()
+    return set(complete[complete].index)

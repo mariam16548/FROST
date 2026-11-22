@@ -15,32 +15,35 @@ from .features import prep_scores
 
 __all__ = [
     "train_params_1d", "train_params_mv", "marginalize_params",
-    "build_fixed_hmm", "TrainedParams",
+    "build_fixed_hmm", "TrainedParams", "COLD_STATE",
 ]
 
 
+COLD_STATE = 0  # by construction: state 0 is the labelled training region
+
+
 class TrainedParams:
-    """Container for a fixed two-state Gaussian HMM parameterisation."""
+    """Container for a fixed two-state Gaussian HMM parameterisation.
 
-    __slots__ = ("startprob", "transmat", "means", "covars", "features",
-                 "state_swapped")
+    State 0 is always the cold state: it is the state estimated from the
+    labelled training interval(s), and training refuses to proceed unless
+    that region scores lower than the rest of the training gene on the first
+    feature (see ``train_params_mv``).
+    """
 
-    def __init__(self, startprob, transmat, means, covars, features,
-                 state_swapped=False):
+    __slots__ = ("startprob", "transmat", "means", "covars", "features")
+
+    def __init__(self, startprob, transmat, means, covars, features):
         self.startprob = startprob
         self.transmat = transmat
         self.means = means
         self.covars = covars
         self.features = list(features)
-        # True if state indices had to be swapped so that state 0 is cold.
-        # Expected to be False for the published configuration; see
-        # docs/CHANGES_FROM_ORIGINAL.md.
-        self.state_swapped = bool(state_swapped)
 
     @property
     def cold_state(self) -> int:
-        """Index of the cold state: lower mean on the first feature."""
-        return int(np.argmin(self.means[:, 0]))
+        """Index of the cold state (always 0; see the class docstring)."""
+        return COLD_STATE
 
     def summary(self) -> dict:
         return {
@@ -52,7 +55,6 @@ class TrainedParams:
                 [np.diag(c) for c in self.covars]
             ).round(6).tolist(),
             "cold_state": self.cold_state,
-            "state_swapped": self.state_swapped,
         }
 
 
@@ -121,7 +123,8 @@ def train_params_mv(df: pd.DataFrame, score_cols: list[str], **kw) -> TrainedPar
 
     Features are assumed conditionally independent given the state, so the
     covariance is diagonal even though ``covariance_type="full"`` is used for
-    decoding. States are ordered so that state 0 is cold on the first feature.
+    decoding. State 0 is the labelled (cold) state; a ``ValueError`` is raised
+    if it does not have the lower mean on the first feature.
     """
     all_means, all_scales = [], []
     startprob = transmat = None
@@ -135,19 +138,24 @@ def train_params_mv(df: pd.DataFrame, score_cols: list[str], **kw) -> TrainedPar
             startprob, transmat = sp, tm
 
     means = np.column_stack(all_means)
-    swapped = bool(means[0, 0] > means[1, 0])
-    if swapped:
-        means = means[[1, 0], :]
-        all_scales = [s[[1, 0]] for s in all_scales]
-        startprob = startprob[[1, 0]]
-        transmat = transmat[[1, 0], :][:, [1, 0]]
+    if means[0, 0] > means[1, 0]:
+        # The labelled region scores *higher* (more damaging) than the rest of
+        # the training gene on the first feature, so it is not a cold region.
+        # Relabelling the states would silently make the *unlabelled* region
+        # the cold state; stop instead.
+        raise ValueError(
+            f"The labelled training region has a higher mean "
+            f"{score_cols[0]!r} ({means[0, 0]:.3f}) than the rest of the "
+            f"training gene ({means[1, 0]:.3f}) after orientation, so it "
+            f"cannot be the cold state. Check training.intervals, the order "
+            f"of features.primary, and features.invert."
+        )
 
     covars = np.array([
         np.diag([all_scales[j][k] ** 2 for j in range(len(score_cols))])
         for k in (0, 1)
     ])
-    return TrainedParams(startprob, transmat, means, covars, score_cols,
-                         state_swapped=swapped)
+    return TrainedParams(startprob, transmat, means, covars, score_cols)
 
 
 def marginalize_params(params: TrainedParams,
@@ -165,7 +173,6 @@ def marginalize_params(params: TrainedParams,
         params.means[:, keep_indices],
         params.covars[:, keep_indices, :][:, :, keep_indices],
         [params.features[i] for i in keep_indices],
-        state_swapped=params.state_swapped,
     )
 
 
