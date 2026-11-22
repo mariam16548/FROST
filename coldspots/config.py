@@ -20,32 +20,39 @@ __all__ = ["Config", "load_config"]
 
 @dataclass
 class DataPaths:
-    # Collapsed per-residue VEP table: one row per (gene, aa_pos).
-    # Used for HMM parameter training and for cold-spot detection.
-    vep_residue_csv: str
-    # Expanded variant-level table: one row per nucleotide-level variant.
-    # Used for BOTH the ClinVar and the MAVE evaluation.
-    vep_expanded_csv: str
+    # The single variant-level input table (CSV, optionally .gz): one row per
+    # missense substitution, carrying the per-residue predictor scores plus
+    # ClinVar and MAVE calls. The per-residue table used for training and
+    # detection is derived from it; both evaluations run on it directly.
+    # See docs/DATA.md for the schema.
+    variant_csv: str
 
 
 @dataclass
 class Columns:
-    clinvar: str = "new_CLNSIG_simple"
-    mave: str = "ExC_assignment"
+    clinvar: str = "CLNSIG"
+    mave: str = "functional_assignment"
+    # Tried in order if `mave` is absent; the resolved name is recorded in the
+    # run manifest.
     mave_candidates: list[str] = field(
         default_factory=lambda: [
-            "ExC_assignment", "assignment", "mave_assignment",
-            "MAVE_assignment", "mave_class", "MAVE_class",
+            "functional_assignment", "ExC_assignment", "assignment",
+            "mave_assignment", "MAVE_assignment", "mave_class", "MAVE_class",
         ]
     )
-    gene_residue: str = "gene_symbol"   # gene column in the residue table
-    gene_expanded: str = "gene_symbol"  # gene column in the expanded table
+    gene: str = "gene_symbol"
+    # Amino-acid position. If the table has no such column, it is parsed from
+    # `protein_variant` (e.g. "C2R" -> 2).
     aa_pos: str = "aa_pos"
-    # Membership columns that may already exist in the expanded table. They
-    # are dropped on load so that cold-spot membership is always recomputed
-    # from the intervals produced by the current run.
+    protein_variant: str = "protein_variant"
+    # Precomputed membership columns that may ship with the table. They are
+    # never read, so cold-spot membership is always recomputed from the
+    # intervals produced by the current run.
     drop_precomputed: list[str] = field(
-        default_factory=lambda: ["in_coldspot", "in_coldspot_bw"]
+        default_factory=lambda: [
+            "variant_in_coldspot", "gene_has_coldspot",
+            "in_coldspot", "in_coldspot_bw",
+        ]
     )
 
 
@@ -55,15 +62,15 @@ class Features:
     # labelled "cold" (the state with the lower mean).
     primary: list[str] = field(
         default_factory=lambda: [
-            "am_pathogenicity", "ESM1B_score", "max_EVE", "phyloP100way",
+            "max_AlphaMissense", "min_ESM1b", "max_EVE", "max_phyloP",
         ]
     )
     # Features dropped (by marginalising the trained Gaussian) to build the
-    # fallback model used for genes missing those scores entirely.
+    # fallback model used for genes missing any value of those scores.
     fallback_drop: list[str] = field(default_factory=lambda: ["max_EVE"])
     # Features whose sign is flipped so that "higher == more damaging" holds
     # for every feature before normalisation.
-    invert: list[str] = field(default_factory=lambda: ["ESM1B_score"])
+    invert: list[str] = field(default_factory=lambda: ["min_ESM1b"])
     # Winsorisation percentiles applied before min-max scaling.
     winsorize: tuple[float, float] = (1.0, 99.0)
 
@@ -98,17 +105,19 @@ class Evaluation:
     #         the gene clears it.
     # "interval": each cold spot must clear the threshold on its own.
     mave_filter_level: str = "gene"
-    # "variant":  count one observation per row of the expanded table.
+    # "variant":  count one observation per row of the input table.
     # "position": collapse to one observation per (gene, aa_pos, label).
     # See docs/METHODS.md - "variant" is the primary analysis, "position" is
     # the pseudo-replication sensitivity analysis.
     unit: str = "variant"
-    # Labels, as they appear in the data, mapped to canonical names.
+    # Canonical name -> label as it appears in the data. PLP and BLB are
+    # required; any other entries are reported but not tested.
     clinvar_labels: dict[str, str] = field(
         default_factory=lambda: {"PLP": "PLP", "BLB": "BLB", "VUS": "VUS"}
     )
     mave_labels: dict[str, str] = field(
-        default_factory=lambda: {"PLP": "PLP", "BLB": "BLB", "IR": "IR"}
+        default_factory=lambda: {"PLP": "Abnormal", "BLB": "Normal",
+                                 "IR": "Indeterminate"}
     )
 
 
@@ -174,6 +183,13 @@ class Config:
             )
         if not self.fallback_features:
             raise ValueError("fallback_drop removes every feature")
+        for name, labels in (("clinvar_labels", e.clinvar_labels),
+                             ("mave_labels", e.mave_labels)):
+            if not {"PLP", "BLB"} <= set(labels):
+                raise ValueError(
+                    f"evaluation.{name} must map both PLP and BLB to the "
+                    f"labels used in the data, got {labels}"
+                )
         if self.detection.min_cold_run < 1:
             raise ValueError("detection.min_cold_run must be >= 1")
         for gene, ivs in self.training.intervals.items():
@@ -223,6 +239,12 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
 
     if "data" not in raw:
         raise KeyError(f"{path}: missing required 'data' section")
+    if "variant_csv" not in raw["data"]:
+        raise KeyError(
+            f"{path}: 'data' must set variant_csv, the single variant-level "
+            f"table (see docs/DATA.md). The older two-table layout "
+            f"(vep_residue_csv + vep_expanded_csv) is no longer supported."
+        )
     cfg = Config(
         data=DataPaths(**raw["data"]),
         **{name: cls(**raw.get(name, {})) for name, cls in _SECTIONS.items()},

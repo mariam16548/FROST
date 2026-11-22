@@ -19,10 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help="YAML configuration file")
-    p.add_argument("--residue-csv", dest="data.vep_residue_csv",
-                   help="override data.vep_residue_csv")
-    p.add_argument("--expanded-csv", dest="data.vep_expanded_csv",
-                   help="override data.vep_expanded_csv")
+    p.add_argument("--variant-csv", dest="data.variant_csv",
+                   help="override data.variant_csv (the input table)")
     p.add_argument("--out-dir", dest="output.dir",
                    help="override output.dir")
     p.add_argument("--prefix", dest="output.prefix",

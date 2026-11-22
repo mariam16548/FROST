@@ -1,42 +1,43 @@
-# Configuration for the published cold-spot analysis.
-# Every parameter used by the pipeline is declared here. Change the paths to
-# point at your own copies of the input tables; leave the rest untouched to
-# reproduce the primary analysis.
+# Configuration for the published FROST analysis.
+# Every parameter used by the pipeline is declared here. Download the input
+# table (docs/DATA.md), put it at the path below (or change the path), and
+# leave the rest untouched to reproduce the primary analysis.
+# Paths are relative to the directory you run the command from.
 
 data:
-  # Collapsed per-residue VEP table: one row per (gene_symbol, aa_pos).
-  # Used for HMM parameter training and for cold-spot detection.
-  vep_residue_csv: data/VEP_scores_with_plddt13_with_08_2026_clinvar.csv
-  # Expanded variant-level table: one row per nucleotide-level variant, with
-  # both ClinVar and MAVE calls already merged in.
-  # Used for BOTH the ClinVar and the MAVE evaluation.
-  vep_expanded_csv: data/VEP_scores_with_plddt13_expanded_with_08_2026_clinvar_mave.csv
+  # The single input table: one row per missense substitution, with
+  # per-residue predictor scores, ClinVar calls and MAVE calls.
+  variant_csv: data/variant_level_coldspots.csv.gz
 
 columns:
-  clinvar: new_CLNSIG_simple
-  mave: ExC_assignment
+  clinvar: CLNSIG
+  mave: functional_assignment
   # Fallbacks tried in order if `mave` is absent; the resolved name is recorded
   # in the run manifest.
   mave_candidates:
+    - functional_assignment
     - ExC_assignment
     - assignment
     - mave_assignment
     - MAVE_assignment
     - mave_class
     - MAVE_class
-  gene_residue: gene_symbol
-  gene_expanded: gene_symbol
+  gene: gene_symbol
+  # Parsed from protein_variant (e.g. "C2R" -> 2) when the table has no
+  # aa_pos column.
   aa_pos: aa_pos
-  # Dropped on load so that membership is always recomputed from this run.
-  drop_precomputed: [in_coldspot, in_coldspot_bw]
+  protein_variant: protein_variant
+  # Never read, so membership is always recomputed from this run.
+  drop_precomputed: [variant_in_coldspot, gene_has_coldspot, in_coldspot, in_coldspot_bw]
 
 features:
-  # Order matters: the first feature defines which HMM state is "cold".
-  primary: [am_pathogenicity, ESM1B_score, max_EVE, phyloP100way]
-  # Marginalised out to build the fallback model for genes lacking these scores.
+  # Per-residue scores. Order matters: the first feature defines the cold state.
+  primary: [max_AlphaMissense, min_ESM1b, max_EVE, max_phyloP]
+  # Marginalised out to build the fallback model for genes with any missing
+  # value of these scores.
   fallback_drop: [max_EVE]
   # Sign-flipped so that higher == more damaging for every feature.
-  invert: [ESM1B_score]
+  invert: [min_ESM1b]
   winsorize: [1.0, 99.0]
 
 training:
@@ -55,8 +56,9 @@ evaluation:
   min_mave_coverage: 0.0    # 0 = off
   mave_filter_level: gene   # gene | interval
   unit: variant             # variant (primary) | position (sensitivity)
+  # canonical name: label as it appears in the data
   clinvar_labels: {PLP: PLP, BLB: BLB, VUS: VUS}
-  mave_labels: {PLP: PLP, BLB: BLB, IR: IR}
+  mave_labels: {PLP: Abnormal, BLB: Normal, IR: Indeterminate}
 
 output:
   dir: results

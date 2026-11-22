@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import union_categoricals
 
 from .config import Config
 from .evaluation import evaluate
@@ -26,54 +27,123 @@ __all__ = ["run", "LoadedData", "load_data"]
 # ----------------------------------------------------------------------------
 @dataclass
 class LoadedData:
-    residues: pd.DataFrame     # collapsed per-residue table (detection input)
-    clinvar_eval: pd.DataFrame  # expanded table, ClinVar gene filter applied
-    mave_eval: pd.DataFrame     # expanded table, rows with a MAVE call
+    residues: pd.DataFrame      # per-residue table derived from the input
+    clinvar_eval: pd.DataFrame  # input rows for ClinVar evaluation
+    mave_eval: pd.DataFrame     # input rows with a MAVE call
     mave_col: str               # resolved MAVE label column name
     clinvar_genes: set[str]     # genes passing the ClinVar count filter
 
 
-def load_data(cfg: Config) -> LoadedData:
-    cols = cfg.columns
-    print("Loading data ...")
-    residues = (pd.read_csv(cfg.data.vep_residue_csv)
-                .sort_values([cols.gene_residue, cols.aa_pos]))
-    expanded = pd.read_csv(cfg.data.vep_expanded_csv, low_memory=False)
+_PROTEIN_VARIANT = r"^[A-Za-z*]{1,3}(\d+)"   # "C2R" / "Cys2Arg" -> 2
 
-    # Cold-spot membership is recomputed from this run's intervals, so any
-    # membership column shipped with the table is dropped to prevent silent
-    # use of a stale assignment.
-    stale = [c for c in cols.drop_precomputed if c in expanded.columns]
-    if stale:
-        expanded = expanded.drop(columns=stale)
-        print(f"  Dropped precomputed membership columns: {stale}")
 
-    mave_col = resolve_column(expanded, cols.mave, cols.mave_candidates,
-                              "MAVE label")
+def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str]:
+    """Read only the needed columns of the input table; add ``aa_pos``.
 
-    required = {cols.gene_expanded, cols.aa_pos, cols.clinvar, mave_col}
-    missing = required - set(expanded.columns)
+    Returns the table and the resolved MAVE column name.
+    """
+    cols, feats = cfg.columns, cfg.features
+    path = cfg.data.variant_csv
+    header = pd.read_csv(path, nrows=0).columns
+    mave_col = resolve_column(pd.DataFrame(columns=header), cols.mave,
+                              cols.mave_candidates, "MAVE label")
+    has_pos = cols.aa_pos in header
+    pos_source = cols.aa_pos if has_pos else cols.protein_variant
+    needed = list(dict.fromkeys(
+        [cols.gene, pos_source, cols.clinvar, mave_col] + feats.primary))
+    missing = [c for c in needed if c not in header]
     if missing:
-        raise KeyError(f"Expanded table missing columns: {sorted(missing)}")
+        raise KeyError(f"{path}: missing columns {missing}. "
+                       f"See docs/DATA.md for the expected schema.")
+
+    # Precomputed membership columns are simply not read, so a stale
+    # assignment can never leak into the evaluation.
+    stale = [c for c in cols.drop_precomputed if c in header]
+    if stale:
+        print(f"  Ignoring precomputed membership columns: {stale}")
+
+    # Read in chunks so the protein_variant strings never all sit in memory at
+    # once: each chunk keeps only the parsed integer position. Gene and label
+    # columns repeat a handful of values across millions of rows, so they are
+    # held as categoricals.
+    cat_cols = list(dict.fromkeys([cols.gene, cols.clinvar, mave_col]))
+    parts = []
+    for chunk in pd.read_csv(path, usecols=needed, chunksize=1_000_000,
+                             low_memory=False,
+                             dtype={c: "category" for c in cat_cols}):
+        # A chunk where a label column is entirely empty infers categories of
+        # a different dtype; give every chunk object categories so they unify.
+        for c in cat_cols:
+            chunk[c] = chunk[c].cat.set_categories(
+                chunk[c].cat.categories.astype(object))
+        if not has_pos:
+            parsed = chunk[cols.protein_variant].str.extract(_PROTEIN_VARIANT)[0]
+            bad = parsed.isna()
+            if bad.any():
+                raise ValueError(
+                    f"Could not read an amino-acid position from "
+                    f"{cols.protein_variant!r} values such as "
+                    f"{chunk.loc[bad, cols.protein_variant].head(3).tolist()}")
+            chunk[cols.aa_pos] = parsed.astype(np.int64)
+            chunk = chunk.drop(columns=cols.protein_variant)
+        parts.append(chunk)
+    if not parts:
+        raise ValueError(f"{path}: the table has no rows")
+    # Chunks infer their own categories; unify them (sorted, as a single
+    # read_csv would) rather than letting concat fall back to strings.
+    cats = {c: union_categoricals([p[c] for p in parts], sort_categories=True)
+            for c in cat_cols}
+    df = pd.concat([p.drop(columns=cat_cols) for p in parts],
+                   ignore_index=True)
+    del parts
+    for c in cat_cols:
+        df[c] = cats[c]
+    return df, mave_col
+
+
+def residue_table(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Collapse the variant table to one row per (gene, aa_pos).
+
+    The predictor scores are per-residue summaries, so every substitution at
+    a residue must carry the same values; anything else means the table is
+    not what the method expects, and is an error.
+    """
+    cols, feats = cfg.columns, cfg.features
+    key = [cols.gene, cols.aa_pos]
+    residues = df.drop_duplicates(key)
+    n_distinct = len(df.drop_duplicates(key + feats.primary))
+    if n_distinct != len(residues):
+        raise ValueError(
+            f"{n_distinct - len(residues)} residues carry different "
+            f"{feats.primary} values across their substitutions; these "
+            f"scores must be per-residue (e.g. max/min over substitutions).")
+    return (residues[key + feats.primary]
+            .sort_values(key).reset_index(drop=True))
+
+
+def load_data(cfg: Config) -> LoadedData:
+    cols, ev = cfg.columns, cfg.evaluation
+    print("Loading data ...")
+    df, mave_col = read_variant_table(cfg)
+    residues = residue_table(df, cfg)
 
     # Training genes are never evaluated.
-    expanded = expanded[
-        ~expanded[cols.gene_expanded].isin(cfg.exclude_genes)
-    ].copy()
+    evaluable = df[~df[cols.gene].isin(cfg.exclude_genes)]
 
     # MAVE evaluation set: rows carrying a functional call. Not subject to the
     # ClinVar count filter - the two evaluations gate genes independently.
-    mave_eval = expanded[expanded[mave_col].notna()].copy()
+    mave_eval = evaluable[evaluable[mave_col].notna()]
 
-    # ClinVar evaluation set: genes with enough PLP and BLB rows.
-    counts = (expanded.groupby(cols.gene_expanded)[cols.clinvar]
-              .value_counts().unstack(fill_value=0))
-    min_n = cfg.evaluation.min_class_count
-    clinvar_genes = set(counts[(counts.get("PLP", 0) >= min_n) &
-                               (counts.get("BLB", 0) >= min_n)].index)
-    clinvar_eval = expanded[
-        expanded[cols.gene_expanded].isin(clinvar_genes)
-    ].copy()
+    # ClinVar evaluation set: genes with enough PLP and BLB rows. reindex so a
+    # table with no PLP (or no BLB) rows at all still yields a column of zeros.
+    plp, blb = ev.clinvar_labels["PLP"], ev.clinvar_labels["BLB"]
+    counts = (evaluable.groupby(cols.gene)[cols.clinvar]
+              .value_counts().unstack(fill_value=0)
+              .reindex(columns=[plp, blb], fill_value=0))
+    min_n = ev.min_class_count
+    clinvar_genes = set(counts[(counts[plp] >= min_n) &
+                               (counts[blb] >= min_n)].index)
+    clinvar_eval = evaluable[evaluable[cols.gene].isin(clinvar_genes)]
 
     _report_inputs(cfg, residues, clinvar_eval, mave_eval, mave_col)
     return LoadedData(residues, clinvar_eval, mave_eval, mave_col,
@@ -84,28 +154,30 @@ def _report_inputs(cfg, residues, clinvar_eval, mave_eval, mave_col) -> None:
     cols, ev = cfg.columns, cfg.evaluation
     n_lab = int(clinvar_eval[cols.clinvar]
                 .isin(list(ev.clinvar_labels.values())).sum())
-    n_pb = int(mave_eval[mave_col].isin(["PLP", "BLB"]).sum())
+    n_pb = int(mave_eval[mave_col]
+               .isin([ev.mave_labels["PLP"], ev.mave_labels["BLB"]]).sum())
     train_desc = ", ".join(
         f"{g} {iv}" for g, ivs in cfg.training_intervals.items() for iv in ivs
     )
     filt = ("no gene filter" if ev.min_class_count == 0
             else f">={ev.min_class_count} PLP & BLB")
-    print(f"  Residue table: "
-          f"{residues[cols.gene_residue].nunique()} genes, "
-          f"{len(residues):,} residues (detection input)")
+    print(f"  Input table  : {cfg.data.variant_csv}")
+    print(f"  Residues     : "
+          f"{residues[cols.gene].nunique()} genes, "
+          f"{len(residues):,} residues (training + detection)")
     print(f"  Trained on   : {train_desc}")
-    print(f"  ClinVar eval : {clinvar_eval[cols.gene_expanded].nunique()} genes "
-          f"(expanded table, {'/'.join(sorted(cfg.exclude_genes))} excluded, "
+    print(f"  ClinVar eval : {clinvar_eval[cols.gene].nunique()} genes "
+          f"({'/'.join(sorted(cfg.exclude_genes))} excluded, "
           f"{filt})")
     print(f"                 {len(clinvar_eval):,} variant rows, {n_lab:,} with "
           f"a {cols.clinvar} call, "
-          f"{clinvar_eval[[cols.gene_expanded, cols.aa_pos]].drop_duplicates().shape[0]:,}"
+          f"{clinvar_eval[[cols.gene, cols.aa_pos]].drop_duplicates().shape[0]:,}"
           f" distinct residues")
-    print(f"  MAVE eval    : {mave_eval[cols.gene_expanded].nunique()} genes "
+    print(f"  MAVE eval    : {mave_eval[cols.gene].nunique()} genes "
           f"(same table, {mave_col!r} column)")
     print(f"                 {len(mave_eval):,} rows with a MAVE call, "
           f"{n_pb:,} PLP/BLB, "
-          f"{mave_eval[[cols.gene_expanded, cols.aa_pos]].drop_duplicates().shape[0]:,}"
+          f"{mave_eval[[cols.gene, cols.aa_pos]].drop_duplicates().shape[0]:,}"
           f" distinct residues")
     print(f"  Counting unit: {ev.unit}"
           + ("  (primary analysis)" if ev.unit == "variant"
@@ -122,14 +194,14 @@ def _report_inputs(cfg, residues, clinvar_eval, mave_eval, mave_col) -> None:
 def _train(cfg: Config, residues: pd.DataFrame):
     """Train the primary model, then marginalise it to the fallback model."""
     cols, feats = cfg.columns, cfg.features
-    kw = dict(gene_col=cols.gene_residue, pos_col=cols.aa_pos,
+    kw = dict(gene_col=cols.gene, pos_col=cols.aa_pos,
               training_intervals=cfg.training_intervals,
               invert=feats.invert, winsorize=feats.winsorize)
 
     # Gene sets for training include the training gene(s).
-    genes_primary = complete_genes(residues, feats.primary, cols.gene_residue)
+    genes_primary = complete_genes(residues, feats.primary, cols.gene)
     genes_fallback = complete_genes(
-        residues, cfg.fallback_features, cols.gene_residue) - genes_primary
+        residues, cfg.fallback_features, cols.gene) - genes_primary
 
     missing_train = [g for g in cfg.training_intervals
                      if g not in genes_primary]
@@ -140,14 +212,10 @@ def _train(cfg: Config, residues: pd.DataFrame):
         )
 
     print("\nTraining parameters ...")
-    train_df = residues[residues[cols.gene_residue].isin(genes_primary)].copy()
+    train_df = residues[residues[cols.gene].isin(genes_primary)].copy()
     primary = train_params_mv(train_df, feats.primary, **kw)
     print(f"  primary ({len(feats.primary)}D {feats.primary}): "
           f"cold mean={primary.means[primary.cold_state].round(3)}")
-    if primary.state_swapped:
-        print("  WARNING: cold/hot state indices were swapped during training. "
-              "This did not occur in the published run - see "
-              "docs/CHANGES_FROM_ORIGINAL.md before trusting these numbers.")
 
     fallback = marginalize_params(primary, cfg.fallback_keep_indices)
     print(f"  fallback ({len(cfg.fallback_features)}D "
@@ -156,8 +224,17 @@ def _train(cfg: Config, residues: pd.DataFrame):
 
     detect_primary = genes_primary - cfg.exclude_genes
     detect_fallback = genes_fallback - cfg.exclude_genes
+    all_genes = set(residues[cols.gene].unique())
+    fb = residues[residues[cols.gene].isin(genes_fallback)]
+    n_partial = int(fb[feats.fallback_drop].notna().any(axis=1)
+                    .groupby(fb[cols.gene]).any().sum())
+    n_dropped = len(all_genes - genes_primary - genes_fallback)
     print(f"\nGene sets (train)  : primary={len(genes_primary)}, "
-          f"fallback={len(genes_fallback)}")
+          f"fallback={len(genes_fallback)} "
+          f"({n_partial} of them have some, but not all, "
+          f"{'/'.join(feats.fallback_drop)} values)")
+    print(f"Not decoded        : {n_dropped} genes with a missing value in "
+          f"{cfg.fallback_features}")
     print(f"Gene sets (detect) : primary={len(detect_primary)}, "
           f"fallback={len(detect_fallback)} "
           f"({'/'.join(sorted(cfg.exclude_genes))} excluded)")
@@ -172,7 +249,7 @@ def detect(cfg: Config, residues: pd.DataFrame) -> tuple[pd.DataFrame, list]:
         print(f"  [{len(params.features)}D: {params.features}]")
         cdf = decode_genes(
             gene_set, params, residues,
-            gene_col=cfg.columns.gene_residue, pos_col=cfg.columns.aa_pos,
+            gene_col=cfg.columns.gene, pos_col=cfg.columns.aa_pos,
             min_cold_run=cfg.detection.min_cold_run,
             invert=cfg.features.invert, winsorize=cfg.features.winsorize,
         )
@@ -204,7 +281,7 @@ def report(cfg: Config, coldspots: pd.DataFrame, ev: dict,
     print(f"\n{'=' * 78}")
     print("  RESULTS")
     print(f"  Counting unit : {ev['unit']}")
-    print(f"  ClinVar eval  : expanded table"
+    print(f"  ClinVar eval  : input table"
           + (f", genes with >={e.min_class_count} PLP & BLB"
              if e.min_class_count else ", all genes"))
     print(f"  MAVE eval     : same table ({mave_col!r}), "
@@ -251,11 +328,29 @@ def report(cfg: Config, coldspots: pd.DataFrame, ev: dict,
 # Outputs
 # ----------------------------------------------------------------------------
 def _git_commit() -> str | None:
+    """Commit of the checkout this package was imported from.
+
+    Returns None if the package is not running from its own git checkout
+    (e.g. a non-editable install inside some other repository), and appends
+    ``-dirty`` when tracked files have uncommitted changes, since the commit
+    alone then does not identify the code that produced the outputs.
+    """
+    pkg_dir = Path(__file__).resolve().parent
+
+    def _git(*args: str) -> str:
+        out = subprocess.run(["git", *args], cwd=pkg_dir, capture_output=True,
+                             text=True, timeout=10)
+        return out.stdout.strip() if out.returncode == 0 else ""
+
     try:
-        out = subprocess.run(["git", "rev-parse", "HEAD"],
-                             cwd=Path(__file__).resolve().parent,
-                             capture_output=True, text=True, timeout=10)
-        return out.stdout.strip() or None
+        top = _git("rev-parse", "--show-toplevel")
+        if not top or Path(top).resolve() != pkg_dir.parent:
+            return None
+        commit = _git("rev-parse", "HEAD")
+        if not commit:
+            return None
+        dirty = _git("status", "--porcelain", "--untracked-files=no")
+        return commit + ("-dirty" if dirty else "")
     except Exception:
         return None
 
@@ -263,13 +358,11 @@ def _git_commit() -> str | None:
 def _versions() -> dict[str, str]:
     import hmmlearn
     import scipy
-    import sklearn
     return {
         "python": platform.python_version(),
         "numpy": np.__version__,
         "pandas": pd.__version__,
         "scipy": scipy.__version__,
-        "scikit-learn": sklearn.__version__,
         "hmmlearn": hmmlearn.__version__,
     }
 

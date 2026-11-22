@@ -79,8 +79,13 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
 
     all_intervals: list[dict] = []
     skipped: list[str] = []
+    # Row indices per gene, computed once. Selecting each gene with a boolean
+    # mask over the whole table is O(genes x rows) and dominated run time at
+    # proteome scale.
+    rows_by_gene = df.groupby(gene_col, sort=False).indices
+    empty = np.array([], dtype=int)
     for gene in sorted(gene_set):
-        gdf = df[df[gene_col] == gene].dropna(subset=score_cols)
+        gdf = df.iloc[rows_by_gene.get(gene, empty)].dropna(subset=score_cols)
         gdf = gdf.sort_values(pos_col).reset_index(drop=True)
         if len(gdf) < 2 * min_cold_run:
             skipped.append(gene)
