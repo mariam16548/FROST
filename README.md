@@ -24,7 +24,7 @@ pip install -e .
 
 ## Run
 
-Try it on a small synthetic dataset first (takes a few seconds):
+Try it on a small synthetic dataset first (takes about 10 seconds):
 
 ```bash
 python scripts/make_synthetic_data.py
@@ -34,10 +34,11 @@ frost --config config/default.yaml \
 
 To reproduce the published coldspots, download
 `variant_level_coldspots.csv.gz` from Zenodo
-([doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228)) into
-`data/`, then run:
+([doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228)) into a
+`data/` folder, then run:
 
 ```bash
+mkdir -p data   # put variant_level_coldspots.csv.gz here
 frost --config config/default.yaml
 ```
 
