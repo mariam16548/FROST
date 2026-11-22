@@ -69,11 +69,14 @@ def test_decode_all_genes_equals_decoding_each_gene_alone():
     pd.testing.assert_frame_equal(together.reset_index(drop=True), alone)
 
 
-def test_short_and_absent_genes_are_skipped():
+def test_short_and_absent_genes_are_handled():
+    """A short gene is decoded like any other; a gene not in the table is
+    ignored."""
     train = _training_gene(n=200, cold=(50, 150))
     p = train_params_mv(train, ["f1", "f2"],
                         training_intervals={"T": [(50, 150)]}, **KW)
     short = _training_gene(n=60, cold=(10, 50)).assign(gene="SHORT")
     out = decode_genes({"SHORT", "ABSENT"}, p, short, min_cold_run=40,
                        verbose=False, **KW)
-    assert out.empty
+    assert list(out["gene"]) == ["SHORT"]
+    assert out["aa_end"].iloc[0] - out["aa_start"].iloc[0] + 1 >= 40

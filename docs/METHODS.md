@@ -41,7 +41,7 @@ analysed without EVE, the EVE terms are dropped from the same fitted model.
 For each gene except BRCA1, positions are ordered by residue number and the
 most likely state sequence is found by Viterbi decoding. Runs of Cold
 spanning fewer than 40 positions are reassigned to Not-Cold; the remaining
-runs are the coldspots. Genes with fewer than 80 scored residues are skipped.
+runs are the coldspots.
 
 A coldspot's length is measured in amino-acid positions. Positions absent from
 the table (mainly where variants affecting splicing were filtered out) are not

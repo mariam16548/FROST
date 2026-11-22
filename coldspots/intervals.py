@@ -57,16 +57,12 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
                  gene_col: str, pos_col: str, min_cold_run: int,
                  invert: list[str], winsorize: tuple[float, float],
                  verbose: bool = True) -> pd.DataFrame:
-    """Run Viterbi decoding for every gene in ``gene_set``.
-
-    Genes with fewer than ``2 * min_cold_run`` scored residues are skipped.
-    """
+    """Run Viterbi decoding for every gene in ``gene_set``."""
     score_cols = params.features
     cold_state = params.cold_state
     model = build_fixed_hmm(params)
 
     all_intervals: list[dict] = []
-    skipped: list[str] = []
     # Row indices per gene, computed once. Selecting each gene with a boolean
     # mask over the whole table is O(genes x rows) and dominated run time at
     # proteome scale.
@@ -75,8 +71,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
     for gene in sorted(gene_set):
         gdf = df.iloc[rows_by_gene.get(gene, empty)].dropna(subset=score_cols)
         gdf = gdf.sort_values(pos_col).reset_index(drop=True)
-        if len(gdf) < 2 * min_cold_run:
-            skipped.append(gene)
+        if gdf.empty:
             continue
         scores_mv = np.column_stack([
             prep_scores(gdf[col].values, col, invert=invert,
@@ -90,10 +85,8 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
         all_intervals.extend(extract_intervals(cold_mask, pos, gene))
 
     if verbose:
-        print(f"    {len(gene_set)} genes -> "
-              f"{len(gene_set) - len(skipped)} processed, "
-              f"{len(skipped)} skipped (<{2 * min_cold_run} scored residues) "
-              f"| {len(all_intervals)} intervals")
+        print(f"    {len(gene_set)} genes decoded with {len(score_cols)} "
+              f"features: {len(all_intervals)} coldspots")
     if not all_intervals:
         return pd.DataFrame(columns=COLDSPOT_COLUMNS)
     return pd.DataFrame(all_intervals)[COLDSPOT_COLUMNS]
