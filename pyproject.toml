@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "coldspots"
 version = "1.0.0"
-description = "FROST (Find Regions Of Substitution Tolerance): mutational cold-spot detection with a two-state Gaussian HMM"
+description = "FROST (Find Regions Of Substitution Tolerance): coldspot detection with a two-state hidden Markov model"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{name = "TODO: author name"}]
+authors = [{name = "Mariam Benazouz"}]
 keywords = ["variant effect prediction", "hidden markov model", "BRCA1", "MAVE"]
 classifiers = [
   "Intended Audience :: Science/Research",
@@ -18,11 +18,11 @@ classifiers = [
   "Programming Language :: Python :: 3",
 ]
 dependencies = [
-  "numpy>=1.24",
-  "pandas>=2.0",
-  "scipy>=1.10",
-  "hmmlearn>=0.3.0",
-  "PyYAML>=6.0",
+  "numpy>=2.0",
+  "pandas>=2.2.2",
+  "scipy>=1.13",
+  "hmmlearn>=0.3.3",
+  "PyYAML>=6.0.1",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +30,6 @@ dev = ["pytest>=7.0"]
 
 [project.scripts]
 frost = "coldspots.cli:main"
-coldspots = "coldspots.cli:main"
 
 [project.urls]
 Repository = "https://github.com/mariam16548/FROST"

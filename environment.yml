@@ -1,5 +1,5 @@
-# conda alternative to requirements.txt
-name: coldspots
+# conda alternative to requirements.txt: conda env create -f environment.yml
+name: frost
 channels: [conda-forge]
 dependencies:
   - python=3.12
@@ -12,3 +12,4 @@ dependencies:
   - pip
   - pip:
       - hmmlearn==0.3.3
+      - -e .

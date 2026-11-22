@@ -1,180 +1,97 @@
-# Find Regions Of Substitution Tolerance (FROST)
+# FROST: Find Regions Of Substitution Tolerance
 
-Detection of **mutational coldspots** — contiguous protein regions depleted
-of pathogenic variation — using a two-state Gaussian hidden Markov model over
-variant-effect-predictor and conservation scores.
+FROST finds **coldspots**: stretches of a protein where missense variants are
+rarely pathogenic. It combines four per-residue scores (AlphaMissense, ESM1b,
+EVE and phyloP) in a two-state hidden Markov model trained once on the known
+BRCA1 coldspot, then applies it to any gene.
 
-Model parameters are estimated once, in closed form, from a single labelled
-region in **BRCA1**, then applied unchanged to every other gene.
+This is the code for:
 
-Running it on the released table reproduces the published results:
+> Benazouz M, Fayer S, McEwen AE, Stone J, Gupta P, Rubin AF, Mooney SD,
+> Fowler DM, Radivojac P, Starita LM. *Scalable identification of mutationally
+> tolerant regions in 1,336 disease-associated genes.* (2026)
 
-* **the coldspot regions** (`*_regions.tsv`: gene, transcript, `aa_start`,
-  `aa_end`), and
-* **the per-variant membership columns** `gene_has_coldspot` and
-  `variant_in_coldspot` (`*_variants.csv.gz`, one row per input row).
+## Install
 
-An optional analysis (`--evaluate`) also tests the regions against ClinVar
-clinical significance and multiplexed assay of variant effect (MAVE)
-functional calls.
-
-This repository contains the code accompanying:
-
-> *[preprint citation]*
-
-The only input is one table, archived on Zenodo:
-[doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228) [variant_level_coldspots.csv.gz].
-
----
-
-## Quick start
-
-Requires Python 3.11 or later (the published run used 3.12).
+Requires Python 3.11 or later.
 
 ```bash
 git clone https://github.com/mariam16548/FROST.git
 cd FROST
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt   # exact versions used for the published run
+pip install -r requirements.txt
 pip install -e .
+```
 
-# 1. Check the install on synthetic data (a few seconds, no download needed)
+## Run
+
+Try it on a small synthetic dataset first (takes a few seconds):
+
+```bash
 python scripts/make_synthetic_data.py
-python -m coldspots.cli --config config/synthetic.yaml
-
-# 2. Reproduce the published regions and membership columns
-#    Download variant_level_coldspots.csv.gz from Zenodo (see docs/DATA.md)
-#    into data/, then:
-python -m coldspots.cli --config config/default.yaml
-
-# Optional: also compute the ClinVar / MAVE odds ratios
-python -m coldspots.cli --config config/default.yaml --evaluate
+frost --config config/default.yaml \
+    --variant-csv data/synthetic/variants.csv.gz --out-dir results/synthetic
 ```
 
-Run the commands from the repository root: paths in the configs are relative
-to the directory you run from. After `pip install -e .`, `frost` works as a
-shorter alias for `python -m coldspots.cli`. If the table is elsewhere, pass
-`--variant-csv /path/to/variant_level_coldspots.csv.gz`. The run takes about
-a minute and 2.5 GB of memory on a laptop, and should report **2,729
-coldspots in 1,336 genes**. `results/coldspots_regions.tsv` then matches the
-published regions table (its protein-coordinate columns), and
-`results/coldspots_variants.csv.gz` matches the table's own
-`gene_has_coldspot` / `variant_in_coldspot` columns on every row.
+To reproduce the published coldspots, download
+`variant_level_coldspots.csv.gz` from Zenodo
+([doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228)) into
+`data/`, then run:
 
-To run the tests: `pytest` (installed by `requirements.txt`).
-
----
-
-## Repository layout
-
-```
-coldspots/
-  config.py       All parameters and paths, loaded from YAML. Nothing is
-                  hard-coded elsewhere.
-  features.py     Feature orientation, winsorisation, min-max scaling.
-  model.py        Supervised estimation of the two-state HMM; marginalisation
-                  to the reduced feature set.
-  intervals.py    Viterbi decoding, short-run filtering, interval extraction.
-  evaluation.py   Membership, MAVE support filtering, odds ratios.
-  pipeline.py     Loading, orchestration, reporting, output writing.
-  synthetic.py    Synthetic input table for smoke tests.
-  cli.py          Command-line interface.
-config/
-  default.yaml    The published primary analysis.
-  synthetic.yaml  Smoke test on synthetic data.
-scripts/
-  make_synthetic_data.py
-tests/            pytest suite (HMM correctness, intervals, evaluation,
-                  end-to-end runs).
-docs/
-  METHODS.md      Full method description, in prose, with the statistics.
-  DATA.md         The input table: schema and where to get it.
+```bash
+frost --config config/default.yaml
 ```
 
----
+This takes about a minute and finds 2,729 coldspots in 1,336 genes. If the
+file is somewhere else, add `--variant-csv path/to/file`. Run commands from
+the repository root.
 
-## Method in brief
+## Input
 
-1. **Load.** The input table has one row per missense substitution. Its
-   per-residue scores are collapsed to one row per residue for training and
-   detection.
-2. **Train.** For each feature, residues inside the labelled BRCA1 interval
-   (residues 224–1366) are treated as the Cold state and the rest of the
-   protein as the Not-Cold state. Per-state means and variances, initial-state
-   probabilities, and Laplace-smoothed transition probabilities are computed
-   directly from these labels. There is **no EM step**; `n_iter=0`.
-3. **Marginalise.** Genes with any missing EVE score are decoded with the
-   trained Gaussian marginalised onto the remaining three features. Because
-   the covariance is diagonal, this marginal is exact, and the reduced model
-   is not retrained — it is the same model, viewed in fewer dimensions.
-4. **Detect.** Viterbi decoding per gene. Cold runs spanning fewer than 40
-   amino acids are discarded.
-5. **Write.** The regions, and each substitution's membership
-   (`variant_in_coldspot`) and its gene's (`gene_has_coldspot`). Training
-   genes (BRCA1) are left empty in both columns.
-6. **Evaluate (optional).** ClinVar and MAVE enrichment of the regions.
+One table with a row per missense substitution. FROST needs the gene, the
+substitution (e.g. `C2R`) and the four per-residue scores; see
+[docs/DATA.md](docs/DATA.md) for the columns.
 
-See [docs/METHODS.md](docs/METHODS.md) for the full description.
+## Output
 
----
-
-## Configuration
-
-`config/default.yaml` holds the manuscript's settings: the four features
-(AlphaMissense, ESM1b, EVE, phyloP), the BRCA1 training region 224–1366, and
-the 40-residue minimum cold-spot length. Leave them as they are to reproduce
-the published results.
-
-Command-line options:
-
-| Option | Meaning |
-| --- | --- |
-| `--config` | Configuration file (default `config/default.yaml`) |
-| `--variant-csv` | Path to the input table |
-| `--out-dir`, `--prefix` | Where to write the outputs |
-| `--evaluate` | Also compute the ClinVar / MAVE odds ratios |
-
----
-
-## Outputs
-
-Written to `output.dir`, prefixed with `output.prefix`:
+Written to `results/`:
 
 | File | Contents |
 | --- | --- |
-| `*_regions.tsv` | Every predicted cold spot: `gene_symbol`, `transcript_id`, `aa_start`, `aa_end` (the published regions table's protein-coordinate columns) |
-| `*_variants.csv.gz` | One row per input row: `transcript_id`, `gene_symbol`, `protein_variant`, `gene_has_coldspot`, `variant_in_coldspot` (empty for training genes) |
-| `*_manifest.json` | Git commit (marked `-dirty` if the code had uncommitted changes), config fingerprint, full resolved config, package versions, the fitted HMM parameters, and region counts |
+| `coldspots_regions.tsv` | One row per coldspot: `gene_symbol`, `transcript_id`, `aa_start`, `aa_end` |
+| `coldspots_variants.csv.gz` | Every input substitution with `gene_has_coldspot` and `variant_in_coldspot` |
+| `coldspots_manifest.json` | Settings, package versions and fitted model parameters for the run |
 
-With `--evaluate`, also `*_metrics.json`: the ClinVar and MAVE odds ratios
-(95% CI, p-value), LR−, the 2×2 counts behind them, and the genes in the MAVE
-evaluation.
+BRCA1 is the training gene, so it is left blank in the variant table.
 
----
+## Benchmarking against ClinVar and MAVE data
 
-## Reproducibility notes
+Add `--evaluate` to also compute how strongly coldspots are enriched for benign
+ClinVar variants and functionally normal MAVE variants, as reported in the
+paper. The odds ratios and counts are written to `coldspots_metrics.json`.
 
-* **The pipeline is deterministic.** Parameters are estimated in closed form and
-  Viterbi decoding is exact; nothing is random, so there is no seed. The same
-  input and config give byte-identical outputs
-  (`tests/test_model.py::test_decoding_is_deterministic` and
-  `tests/test_pipeline.py::test_two_runs_give_identical_files` check this).
-* **Versions are recorded, not just pinned.** Every run writes the exact
-  versions of numpy, pandas, scipy and hmmlearn to the manifest, alongside the
-  git commit and a hash of the resolved config. `requirements.txt` pins the
-  versions used for the published run.
-* **Membership is always recomputed.** The `variant_in_coldspot` and
-  `gene_has_coldspot` columns shipped in the table are never read; the
-  pipeline recomputes them (and reproduces both exactly).
+```bash
+frost --config config/default.yaml --evaluate
+```
 
----
+## How it works
 
-## Citation
+1. Scale each score (the most deleterious value at each residue) to 0–1
+   within the gene.
+2. Estimate the model from BRCA1, with residues 224–1366 as Cold and the rest
+   as Not-Cold.
+3. Find the most likely Cold/Not-Cold path through each gene (Viterbi).
+4. Keep Cold runs of at least 40 residues as coldspots.
 
-If you use this code, please cite the paper (see `CITATION.cff`).
+Genes missing EVE scores use the other three. The method settings are in
+`config/default.yaml`, and [docs/METHODS.md](docs/METHODS.md) describes each
+step in detail.
+
+## Tests
+
+```bash
+pytest
+```
 
 ## License
 
-[MIT](LICENSE) for the code. The input data is released under CC BY 4.0 and
-is governed by the terms of its original sources; see
-[docs/DATA.md](docs/DATA.md).
+Code: [MIT](LICENSE). Data: CC BY 4.0; see [docs/DATA.md](docs/DATA.md).

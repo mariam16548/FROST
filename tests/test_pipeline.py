@@ -23,7 +23,7 @@ def _cfg(synth, out_dir, evaluate=True, **extra):
     overrides = {"data.variant_csv": str(synth["variants"]),
                  "output.dir": str(out_dir),
                  "evaluation.enabled": evaluate, **extra}
-    return load_config(REPO / "config" / "synthetic.yaml", overrides)
+    return load_config(REPO / "config" / "default.yaml", overrides)
 
 
 def test_end_to_end_recovers_planted_cold_spots(synth, tmp_path):
@@ -45,13 +45,14 @@ def test_end_to_end_recovers_planted_cold_spots(synth, tmp_path):
 
     assert "BRCA1" not in set(calls["gene"])       # training gene excluded
     assert "G00000" not in set(calls["gene"])      # has a missing AM value
-    assert set(calls["model"]) == {"4D", "3D"}     # fallback model was used
+    no_eve = res.groupby("gene_symbol")["max_EVE"].apply(lambda x: x.isna().any())
+    assert set(calls["gene"]) & set(no_eve[no_eve].index)  # 3-feature genes too
 
     metrics = json.loads(result["written"]["metrics"].read_text())
     assert metrics["or_clinvar"]["OR"] > 1         # synthetic cold = benign
 
     manifest = json.loads(result["written"]["manifest"].read_text())
-    assert manifest["trained_models"][0]["cold_state"] == 0
+    assert manifest["fitted_models"][0]["cold_state"] == 0
     assert "scikit-learn" not in manifest["package_versions"]
 
 
@@ -122,11 +123,15 @@ def test_scores_that_vary_within_a_residue_are_rejected(synth, tmp_path):
         run(_cfg(synth, tmp_path, **{"data.variant_csv": str(path)}))
 
 
-def test_old_two_table_config_gives_a_clear_error(tmp_path):
-    cfg = tmp_path / "old.yaml"
-    cfg.write_text("data:\n  vep_residue_csv: a.csv\n  vep_expanded_csv: b.csv\n")
-    with pytest.raises(KeyError, match="variant_csv"):
-        load_config(cfg)
+def test_missing_aa_pos_is_an_error(synth, tmp_path):
+    """A blank position must stop the run, not silently drop coldspots."""
+    df = pd.read_csv(synth["variants"], low_memory=False)
+    df["aa_pos"] = df["protein_variant"].str[1:-1].astype(float)
+    df.loc[df.index[500], "aa_pos"] = np.nan
+    path = tmp_path / "blank_pos.csv"
+    df.drop(columns="protein_variant").to_csv(path, index=False)
+    with pytest.raises(ValueError, match="amino-acid position"):
+        run(_cfg(synth, tmp_path, **{"data.variant_csv": str(path)}))
 
 
 def test_default_run_writes_regions_and_membership(synth, tmp_path):

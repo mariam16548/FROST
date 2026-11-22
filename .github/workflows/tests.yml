@@ -28,4 +28,5 @@ jobs:
       - name: README quick start on synthetic data
         run: |
           python scripts/make_synthetic_data.py
-          frost --config config/synthetic.yaml
+          frost --config config/default.yaml --evaluate \
+            --variant-csv data/synthetic/variants.csv.gz --out-dir results/synthetic

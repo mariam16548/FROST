@@ -14,15 +14,13 @@ columns:
   # unless the table has an aa_pos column.
   aa_pos: aa_pos
   protein_variant: protein_variant
-  # Shipped in the table with the published calls; never read.
-  drop_precomputed: [variant_in_coldspot, gene_has_coldspot]
   # Used only by the optional evaluation.
   clinvar: CLNSIG
   mave: functional_assignment
 
 features:
-  # Most deleterious value per residue. The first feature defines the Cold
-  # state (lower mean AlphaMissense).
+  # Most deleterious value per residue. The Cold state is the one with the
+  # lower mean of the first feature (AlphaMissense).
   primary: [max_AlphaMissense, min_ESM1b, max_EVE, max_phyloP]
   # Genes with any position lacking EVE use the other three features.
   fallback_drop: [max_EVE]
@@ -46,8 +44,8 @@ evaluation:
   # Optional ClinVar / MAVE odds ratios (turn on here or with --evaluate).
   enabled: false
   # A gene enters the MAVE evaluation if its abnormal/normal calls cover at
-  # least this many distinct positions inside its cold spots, summed across
-  # all of its cold spots.
+  # least this many distinct positions inside its coldspots, summed across
+  # all of its coldspots.
   min_mave_positions: 10
   # canonical name: label as it appears in the data
   clinvar_labels: {PLP: PLP, BLB: BLB, VUS: VUS}

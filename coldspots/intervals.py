@@ -1,4 +1,4 @@
-"""Viterbi decoding and cold-spot interval extraction."""
+"""Viterbi decoding and coldspot calling."""
 from __future__ import annotations
 
 import numpy as np
@@ -24,12 +24,10 @@ def _runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def filter_short_regions(cold_mask: np.ndarray, positions: np.ndarray,
                          min_length: int = 40) -> np.ndarray:
-    """Drop cold runs spanning fewer than ``min_length`` amino-acid positions.
+    """Drop Cold runs spanning fewer than ``min_length`` positions.
 
-    Length is measured in aa coordinates (``end - start + 1``), not in scored
-    residues. Residues missing from the table are absent from ``positions``,
-    so a run can span 40 aa while containing fewer than 40 observations. The
-    count of observations is reported separately as ``n_residues_scored``.
+    The span is ``end - start + 1`` in amino-acid positions, so it includes
+    any positions missing from the table.
     """
     positions = np.asarray(positions)
     filtered = np.zeros(len(cold_mask), dtype=bool)
@@ -61,8 +59,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
                  verbose: bool = True) -> pd.DataFrame:
     """Run Viterbi decoding for every gene in ``gene_set``.
 
-    Genes with fewer than ``2 * min_cold_run`` scored residues are skipped: a
-    protein that short cannot support a Cold/Not-Cold contrast at this resolution.
+    Genes with fewer than ``2 * min_cold_run`` scored residues are skipped.
     """
     score_cols = params.features
     cold_state = params.cold_state
@@ -73,7 +70,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
     # Row indices per gene, computed once. Selecting each gene with a boolean
     # mask over the whole table is O(genes x rows) and dominated run time at
     # proteome scale.
-    rows_by_gene = df.groupby(gene_col, sort=False).indices
+    rows_by_gene = df.groupby(gene_col, sort=False, observed=True).indices
     empty = np.array([], dtype=int)
     for gene in sorted(gene_set):
         gdf = df.iloc[rows_by_gene.get(gene, empty)].dropna(subset=score_cols)

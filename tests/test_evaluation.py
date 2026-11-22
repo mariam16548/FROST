@@ -1,4 +1,4 @@
-"""Cold-spot membership, MAVE support filtering, and odds ratios."""
+"""Coldspot membership, MAVE support filtering, and odds ratios."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -32,12 +32,12 @@ def test_in_intervals_matches_naive_check():
 
 
 def _mave_case():
-    """Gene G: two cold spots and MAVE calls (released wording).
+    """Gene G: two coldspots and MAVE calls (released wording).
 
     A = [1, 100]:   100 positions with one Normal call each
     B = [201, 204]: 4 positions with 50 Normal calls each
     outside:        50 positions (301-350) with one Abnormal call each
-    Gene H: one cold spot [1, 50] with only 5 assayed positions inside.
+    Gene H: one coldspot [1, 50] with only 5 assayed positions inside.
     """
     rows = ([("G", p, "Normal") for p in range(1, 101)]
             + [("G", p, "Normal") for p in range(201, 205) for _ in range(50)]
@@ -61,13 +61,13 @@ def _cfg():
 
 
 def test_mave_filter_sums_positions_across_a_genes_cold_spots():
-    """G passes (104 positions over two cold spots); H has 5 and is left out.
+    """G passes (104 positions over two coldspots); H has 5 and is left out.
 
-    Every cold spot of a passing gene counts, including B with only 4
+    Every coldspot of a passing gene counts, including B with only 4
     assayed positions of its own.
     """
     cold, mave = _mave_case()
-    ev = evaluate(cold, mave.iloc[:0], mave, cfg=_cfg(), mave_col="call")
+    ev = evaluate(cold, mave.iloc[:0], mave, cfg=_cfg())
     assert ev["mave_genes"] == ["G"]
     assert ev["n_mave_intervals"] == 2
     # Each substitution counts once: 100 + 200 Normal inside, 50 Abnormal out.
@@ -88,7 +88,7 @@ def test_odds_ratio_values_and_direction():
     o = odds_ratio(summary)
     assert o["table"] == [[10, 5], [2, 8]]
     # Haldane-Anscombe corrected point estimate: (10.5 * 8.5) / (5.5 * 2.5)
-    assert o["OR"] == pytest.approx(round(10.5 * 8.5 / (5.5 * 2.5), 2))
+    assert o["OR"] == pytest.approx(10.5 * 8.5 / (5.5 * 2.5))
     assert o["OR"] > 1  # benign enriched inside = pathogenic depletion
     assert o["p"] == pytest.approx(fisher_exact([[10, 5], [2, 8]])[1])
     assert o["OR_lo"] < o["OR"] < o["OR_hi"]
