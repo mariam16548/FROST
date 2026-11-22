@@ -21,7 +21,7 @@ The only input is one table, archived on Zenodo:
 
 ## Quick start
 
-Requires Python 3.10 or later (the published run used 3.12).
+Requires Python 3.11 or later (the published run used 3.12).
 
 ```bash
 git clone https://github.com/mariam16548/FROST.git
@@ -42,7 +42,8 @@ python -m coldspots.cli --config config/sensitivity_position_level.yaml
 ```
 
 Run the commands from the repository root: paths in the configs are relative
-to the directory you run from. If the table is elsewhere, pass
+to the directory you run from. After `pip install -e .`, `frost` works as a
+shorter alias for `python -m coldspots.cli`. If the table is elsewhere, pass
 `--variant-csv /path/to/variant_level_coldspots.csv.gz`. The full run takes
 about 30 seconds and 2.5 GB of memory on a laptop, and should report
 **2,729 coldspots in 1,336 genes**.

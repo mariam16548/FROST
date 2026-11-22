@@ -318,10 +318,16 @@ def report(cfg: Config, coldspots: pd.DataFrame, ev: dict,
                              ("MAVE", "or_mave", "lr_mave")):
         o = ev[key]
         print(f"\n  {name}: OR(benign inside) = {o['OR']} "
-              f"[{o['OR_lo']}-{o['OR_hi']}] p={o['p']:.4g}"
+              f"[{o['OR_lo']}-{o['OR_hi']}] p={_format_p(o['p'])}"
               if not isinstance(o["p"], float) or not np.isnan(o["p"])
               else f"\n  {name}: OR not estimable")
         print(f"          rate(PLP)/rate(BLB) = {ev[lrkey]:.4f}")
+
+
+def _format_p(p: float) -> str:
+    """Fisher p-values for large tables underflow to exactly 0.0 in floating
+    point; print that as a bound rather than as "p=0"."""
+    return "<1e-300" if p == 0 else f"{p:.4g}"
 
 
 # ----------------------------------------------------------------------------

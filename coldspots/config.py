@@ -183,6 +183,31 @@ class Config:
             )
         if not self.fallback_features:
             raise ValueError("fallback_drop removes every feature")
+        lo, hi = self.features.winsorize
+        if not 0 <= lo < hi <= 100:
+            raise ValueError(
+                f"features.winsorize must satisfy 0 <= low < high <= 100, "
+                f"got {list(self.features.winsorize)}")
+        bad_invert = [f for f in self.features.invert
+                      if f not in self.features.primary]
+        if bad_invert:
+            raise ValueError(
+                f"features.invert entries not in features.primary: "
+                f"{bad_invert}")
+        if len(set(self.features.primary)) != len(self.features.primary):
+            raise ValueError("features.primary contains duplicates")
+        if not 0 <= e.min_mave_coverage <= 1:
+            raise ValueError("evaluation.min_mave_coverage must be in [0, 1]")
+        if e.min_mave_positions < 0 or e.min_class_count < 0:
+            raise ValueError("evaluation.min_mave_positions and "
+                             "min_class_count must be >= 0")
+        missing_train = [g for g in self.training.intervals
+                         if g not in self.training.exclude_genes]
+        if missing_train:
+            raise ValueError(
+                f"training gene(s) {missing_train} must also be listed in "
+                f"training.exclude_genes: a gene cannot be evaluated on the "
+                f"labels it was trained on")
         for name, labels in (("clinvar_labels", e.clinvar_labels),
                              ("mave_labels", e.mave_labels)):
             if not {"PLP", "BLB"} <= set(labels):
@@ -190,6 +215,9 @@ class Config:
                     f"evaluation.{name} must map both PLP and BLB to the "
                     f"labels used in the data, got {labels}"
                 )
+            if labels["PLP"] == labels["BLB"]:
+                raise ValueError(f"evaluation.{name}: PLP and BLB map to the "
+                                 f"same label {labels['PLP']!r}")
         if self.detection.min_cold_run < 1:
             raise ValueError("detection.min_cold_run must be >= 1")
         for gene, ivs in self.training.intervals.items():

@@ -7,7 +7,7 @@ name = "coldspots"
 version = "1.0.0"
 description = "FROST (Find Regions Of Substitution Tolerance): mutational cold-spot detection with a two-state Gaussian HMM"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "TODO: author name"}]
@@ -29,6 +29,7 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.scripts]
+frost = "coldspots.cli:main"
 coldspots = "coldspots.cli:main"
 
 [project.urls]
