@@ -110,9 +110,22 @@ removes every row for residues where all candidate substitutions are
 splice-affecting. 430 of the 2,729 cold spots span at least one gap,
 accounting for 0.3% of total cold-spot length.
 
-## 6. Evaluation
+## 6. Outputs
 
-### 6.1 Membership
+The regions table lists each cold spot's gene, transcript and closed
+amino-acid interval. The per-variant table gives every input row
+`variant_in_coldspot` (its residue lies inside a cold spot of its gene) and
+`gene_has_coldspot` (its gene has at least one cold spot); both are empty for
+training genes, which are never decoded. On the released table these
+reproduce the published regions and the table's own membership columns
+exactly.
+
+## 7. Evaluation (optional)
+
+Off by default (`evaluation.enabled: false`); enable with `--evaluate`. The
+rest of this section describes what it computes.
+
+### 7.1 Membership
 
 Cold-spot membership is recomputed from the intervals produced by the current
 run. Any `in_coldspot`-style column in the input table is dropped on load and
@@ -122,7 +135,7 @@ Only genes carrying at least one predicted cold spot contribute to the tests. A
 gene with no predicted cold spot offers no inside/outside contrast and is
 excluded rather than counted as entirely outside.
 
-### 6.2 ClinVar evaluation
+### 7.2 ClinVar evaluation
 
 Runs over the full cold-spot set. Variants are grouped as PLP
 (pathogenic/likely pathogenic), BLB (benign/likely benign), and VUS. VUS counts
@@ -132,7 +145,7 @@ inside cold spots are reported but not tested.
 many PLP and BLB rows; the published configuration sets it to 0, i.e. no gene
 filter.
 
-### 6.3 MAVE evaluation
+### 7.3 MAVE evaluation
 
 Runs over the same table, keyed on the functional-call column, and is
 restricted to cold spots with enough assay support: at least
@@ -158,7 +171,7 @@ Each retained region reports `n_PLP`, `n_BLB`, `n_positions`, `n_assayed`
 any depletion claim: a region can clear the position threshold on a handful of
 clustered residues at one edge while most of it is unassayed.
 
-### 6.4 Statistics
+### 7.4 Statistics
 
 For each evaluation, a 2×2 table is formed:
 
@@ -182,7 +195,7 @@ Also reported is the rate ratio `rate(PLP inside) / rate(BLB inside)`, labelled
 given a pathogenic versus a benign variant. Values below 1 mean that membership
 argues against pathogenicity.
 
-### 6.5 Counting unit and pseudo-replication
+### 7.5 Counting unit and pseudo-replication
 
 `evaluation.unit` sets what counts as one observation.
 
@@ -204,7 +217,7 @@ ignores between-gene differences in baseline rates. A gene-stratified test
 (e.g. Cochran–Mantel–Haenszel) or a permutation test that re-places intervals
 within each gene would give a more defensible p-value.
 
-## 7. Determinism
+## 8. Determinism
 
 Nothing in the pipeline is stochastic. Parameters are estimated in closed form,
 Viterbi decoding is exact, and no bootstrap or permutation step is used. The

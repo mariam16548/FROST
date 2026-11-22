@@ -26,10 +26,11 @@ the rest are carried for annotation and ignored.
 | `min_ESM1b` | yes | per-residue minimum ESM1b; **more negative = more damaging**, sign-flipped by the pipeline |
 | `max_EVE` | yes | per-residue maximum EVE; may be missing — a gene with any missing value uses the 3-feature model |
 | `max_phyloP` | yes | per-residue maximum phyloP; higher = more conserved |
-| `CLNSIG` | yes | ClinVar: `PLP`, `BLB`, `VUS`, or empty |
-| `functional_assignment` | yes | MAVE call: `Abnormal` (counted as PLP), `Normal` (BLB), `Indeterminate` (IR), or empty |
-| `transcript_id`, `pLDDT`, `AlphaMissense`, `REVEL`, `MutPred2`, `pfam_domain` | no | annotation |
-| `gene_has_coldspot`, `variant_in_coldspot` | **never read** | the published calls, for convenience; the pipeline recomputes membership and reproduces both columns exactly |
+| `transcript_id` | yes | copied into the outputs; one per gene |
+| `CLNSIG` | evaluation only | ClinVar: `PLP`, `BLB`, `VUS`, or empty |
+| `functional_assignment` | evaluation only | MAVE call: `Abnormal` (counted as PLP), `Normal` (BLB), `Indeterminate` (IR), or empty |
+| `pLDDT`, `AlphaMissense`, `REVEL`, `MutPred2`, `pfam_domain` | no | annotation |
+| `gene_has_coldspot`, `variant_in_coldspot` | **never read** | the published calls, for convenience; the pipeline recomputes them and its `*_variants.csv.gz` matches both columns on every row |
 
 The four predictor columns are per-residue summaries, so they repeat across
 the substitutions at a residue. The pipeline checks this and stops with an
@@ -37,9 +38,10 @@ error if a residue carries different values. A gene with any missing
 `max_AlphaMissense`, `min_ESM1b` or `max_phyloP` value is not decoded (none
 are in the released table).
 
-Because there is one row per substitution, a residue can carry several
-ClinVar or MAVE calls. This is what makes the counting-unit distinction in
-`evaluation.unit` necessary; see [METHODS.md §6.5](METHODS.md).
+`CLNSIG` and `functional_assignment` are read only when the optional
+evaluation is on (`--evaluate`). Because there is one row per substitution, a
+residue can carry several ClinVar or MAVE calls. This is what makes the counting-unit distinction in
+`evaluation.unit` necessary; see [METHODS.md §7.5](METHODS.md).
 
 ## Using a different table
 

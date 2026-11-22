@@ -41,6 +41,8 @@ class Columns:
         ]
     )
     gene: str = "gene_symbol"
+    # Copied into the regions table if present (one transcript per gene).
+    transcript: str = "transcript_id"
     # Amino-acid position. If the table has no such column, it is parsed from
     # `protein_variant` (e.g. "C2R" -> 2).
     aa_pos: str = "aa_pos"
@@ -94,6 +96,10 @@ class Detection:
 
 @dataclass
 class Evaluation:
+    # Optional ClinVar / MAVE enrichment analysis. Off by default: the
+    # pipeline's job is the cold-spot regions and the per-variant membership
+    # column. When off, the clinvar and MAVE columns are not needed at all.
+    enabled: bool = False
     # ClinVar gene filter: keep genes with >= this many PLP and BLB rows.
     # 0 disables the filter.
     min_class_count: int = 0
@@ -125,7 +131,10 @@ class Evaluation:
 class Output:
     dir: str = "results"
     prefix: str = "coldspots"
-    write_pickle: bool = True
+    # The input table's identifying columns plus gene_has_coldspot and
+    # variant_in_coldspot (gzipped CSV, one row per input row).
+    variant_table: bool = True
+    write_pickle: bool = False
 
 
 @dataclass

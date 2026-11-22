@@ -25,6 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override output.dir")
     p.add_argument("--prefix", dest="output.prefix",
                    help="override output.prefix")
+    p.add_argument("--evaluate", dest="evaluation.enabled",
+                   action="store_const", const=True,
+                   help="also run the ClinVar / MAVE enrichment analysis")
     p.add_argument("--unit", dest="evaluation.unit",
                    choices=["variant", "position"],
                    help="counting unit for the enrichment tests")

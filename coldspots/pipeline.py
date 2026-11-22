@@ -1,6 +1,7 @@
 """End-to-end pipeline: load -> train -> detect -> evaluate -> write."""
 from __future__ import annotations
 
+import gzip
 import json
 import pickle
 import platform
@@ -14,7 +15,7 @@ import pandas as pd
 from pandas.api.types import union_categoricals
 
 from .config import Config
-from .evaluation import evaluate
+from .evaluation import evaluate, in_intervals
 from .features import complete_genes, resolve_column
 from .intervals import COLDSPOT_COLUMNS, decode_genes
 from .model import marginalize_params, train_params_mv
@@ -27,30 +28,47 @@ __all__ = ["run", "LoadedData", "load_data"]
 # ----------------------------------------------------------------------------
 @dataclass
 class LoadedData:
-    residues: pd.DataFrame      # per-residue table derived from the input
-    clinvar_eval: pd.DataFrame  # input rows for ClinVar evaluation
-    mave_eval: pd.DataFrame     # input rows with a MAVE call
-    mave_col: str               # resolved MAVE label column name
-    clinvar_genes: set[str]     # genes passing the ClinVar count filter
+    residues: pd.DataFrame       # per-residue table derived from the input
+    transcripts: dict[str, str]  # gene -> transcript (empty if no column)
+    # The rest are None unless evaluation.enabled:
+    clinvar_eval: pd.DataFrame | None = None  # rows for ClinVar evaluation
+    mave_eval: pd.DataFrame | None = None     # rows with a MAVE call
+    mave_col: str | None = None               # resolved MAVE label column
+    clinvar_genes: set[str] | None = None     # genes passing the ClinVar filter
 
 
 _PROTEIN_VARIANT = r"^[A-Za-z*]{1,3}(\d+)"   # "C2R" / "Cys2Arg" -> 2
 
 
-def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str]:
+def _parse_positions(values: pd.Series, name: str) -> pd.Series:
+    parsed = values.str.extract(_PROTEIN_VARIANT)[0]
+    bad = parsed.isna()
+    if bad.any():
+        raise ValueError(
+            f"Could not read an amino-acid position from {name!r} values "
+            f"such as {values[bad].head(3).tolist()}")
+    return parsed.astype(np.int64)
+
+
+def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str | None]:
     """Read only the needed columns of the input table; add ``aa_pos``.
 
-    Returns the table and the resolved MAVE column name.
+    Returns the table and the resolved MAVE column name (None when the
+    evaluation is off, in which case ClinVar/MAVE columns are not read).
     """
     cols, feats = cfg.columns, cfg.features
     path = cfg.data.variant_csv
     header = pd.read_csv(path, nrows=0).columns
-    mave_col = resolve_column(pd.DataFrame(columns=header), cols.mave,
-                              cols.mave_candidates, "MAVE label")
+    evaluate_on = cfg.evaluation.enabled
+    mave_col = (resolve_column(pd.DataFrame(columns=header), cols.mave,
+                               cols.mave_candidates, "MAVE label")
+                if evaluate_on else None)
     has_pos = cols.aa_pos in header
     pos_source = cols.aa_pos if has_pos else cols.protein_variant
+    label_cols = [cols.clinvar, mave_col] if evaluate_on else []
+    transcript = [cols.transcript] if cols.transcript in header else []
     needed = list(dict.fromkeys(
-        [cols.gene, pos_source, cols.clinvar, mave_col] + feats.primary))
+        [cols.gene, pos_source] + transcript + label_cols + feats.primary))
     missing = [c for c in needed if c not in header]
     if missing:
         raise KeyError(f"{path}: missing columns {missing}. "
@@ -66,7 +84,7 @@ def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str]:
     # once: each chunk keeps only the parsed integer position. Gene and label
     # columns repeat a handful of values across millions of rows, so they are
     # held as categoricals.
-    cat_cols = list(dict.fromkeys([cols.gene, cols.clinvar, mave_col]))
+    cat_cols = list(dict.fromkeys([cols.gene] + transcript + label_cols))
     parts = []
     for chunk in pd.read_csv(path, usecols=needed, chunksize=1_000_000,
                              low_memory=False,
@@ -77,14 +95,8 @@ def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str]:
             chunk[c] = chunk[c].cat.set_categories(
                 chunk[c].cat.categories.astype(object))
         if not has_pos:
-            parsed = chunk[cols.protein_variant].str.extract(_PROTEIN_VARIANT)[0]
-            bad = parsed.isna()
-            if bad.any():
-                raise ValueError(
-                    f"Could not read an amino-acid position from "
-                    f"{cols.protein_variant!r} values such as "
-                    f"{chunk.loc[bad, cols.protein_variant].head(3).tolist()}")
-            chunk[cols.aa_pos] = parsed.astype(np.int64)
+            chunk[cols.aa_pos] = _parse_positions(chunk[cols.protein_variant],
+                                                  cols.protein_variant)
             chunk = chunk.drop(columns=cols.protein_variant)
         parts.append(chunk)
     if not parts:
@@ -127,6 +139,23 @@ def load_data(cfg: Config) -> LoadedData:
     df, mave_col = read_variant_table(cfg)
     residues = residue_table(df, cfg)
 
+    transcripts: dict[str, str] = {}
+    if cols.transcript in df.columns:
+        pairs = df[[cols.gene, cols.transcript]].drop_duplicates()
+        multi = pairs[cols.gene].duplicated(keep=False)
+        if multi.any():
+            raise ValueError(
+                f"{int(pairs.loc[multi, cols.gene].nunique())} genes have more "
+                f"than one {cols.transcript!r}; the method expects one "
+                f"transcript per gene, e.g. "
+                f"{sorted(pairs.loc[multi, cols.gene].astype(str).unique())[:3]}")
+        transcripts = dict(zip(pairs[cols.gene].astype(str),
+                               pairs[cols.transcript].astype(str)))
+
+    _report_inputs(cfg, residues)
+    if not ev.enabled:
+        return LoadedData(residues, transcripts)
+
     # Training genes are never evaluated.
     evaluable = df[~df[cols.gene].isin(cfg.exclude_genes)]
 
@@ -145,27 +174,34 @@ def load_data(cfg: Config) -> LoadedData:
                                (counts[blb] >= min_n)].index)
     clinvar_eval = evaluable[evaluable[cols.gene].isin(clinvar_genes)]
 
-    _report_inputs(cfg, residues, clinvar_eval, mave_eval, mave_col)
-    return LoadedData(residues, clinvar_eval, mave_eval, mave_col,
-                      clinvar_genes)
+    _report_eval_inputs(cfg, clinvar_eval, mave_eval, mave_col)
+    return LoadedData(residues, transcripts, clinvar_eval, mave_eval,
+                      mave_col, clinvar_genes)
 
 
-def _report_inputs(cfg, residues, clinvar_eval, mave_eval, mave_col) -> None:
-    cols, ev = cfg.columns, cfg.evaluation
-    n_lab = int(clinvar_eval[cols.clinvar]
-                .isin(list(ev.clinvar_labels.values())).sum())
-    n_pb = int(mave_eval[mave_col]
-               .isin([ev.mave_labels["PLP"], ev.mave_labels["BLB"]]).sum())
+def _report_inputs(cfg, residues) -> None:
+    cols = cfg.columns
     train_desc = ", ".join(
         f"{g} {iv}" for g, ivs in cfg.training_intervals.items() for iv in ivs
     )
-    filt = ("no gene filter" if ev.min_class_count == 0
-            else f">={ev.min_class_count} PLP & BLB")
     print(f"  Input table  : {cfg.data.variant_csv}")
     print(f"  Residues     : "
           f"{residues[cols.gene].nunique()} genes, "
           f"{len(residues):,} residues (training + detection)")
     print(f"  Trained on   : {train_desc}")
+    print(f"  Evaluation   : "
+          + ("on (ClinVar / MAVE enrichment)" if cfg.evaluation.enabled
+             else "off (set evaluation.enabled or pass --evaluate)"))
+
+
+def _report_eval_inputs(cfg, clinvar_eval, mave_eval, mave_col) -> None:
+    cols, ev = cfg.columns, cfg.evaluation
+    n_lab = int(clinvar_eval[cols.clinvar]
+                .isin(list(ev.clinvar_labels.values())).sum())
+    n_pb = int(mave_eval[mave_col]
+               .isin([ev.mave_labels["PLP"], ev.mave_labels["BLB"]]).sum())
+    filt = ("no gene filter" if ev.min_class_count == 0
+            else f">={ev.min_class_count} PLP & BLB")
     print(f"  ClinVar eval : {clinvar_eval[cols.gene].nunique()} genes "
           f"({'/'.join(sorted(cfg.exclude_genes))} excluded, "
           f"{filt})")
@@ -272,8 +308,10 @@ def detect(cfg: Config, residues: pd.DataFrame) -> tuple[pd.DataFrame, list]:
 # ----------------------------------------------------------------------------
 # Reporting
 # ----------------------------------------------------------------------------
-def report(cfg: Config, coldspots: pd.DataFrame, ev: dict,
-           clinvar_genes: set[str], mave_col: str) -> None:
+def report(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
+           clinvar_genes: set[str] | None, mave_col: str | None) -> None:
+    if not cfg.evaluation.enabled:
+        return
     if ev is None:
         print("\nNo cold spots detected; nothing to evaluate.")
         return
@@ -390,22 +428,80 @@ def _jsonable(obj):
     return obj
 
 
+def regions_table(coldspots: pd.DataFrame, cfg: Config,
+                  transcripts: dict[str, str]) -> pd.DataFrame:
+    """Cold-spot regions in the released format, protein coordinates."""
+    cols = cfg.columns
+    out = pd.DataFrame({cols.gene: coldspots["gene"].astype(str)})
+    if transcripts:
+        out[cols.transcript] = out[cols.gene].map(transcripts)
+    out["aa_start"] = coldspots["aa_start"].astype(int).values
+    out["aa_end"] = coldspots["aa_end"].astype(int).values
+    return out
+
+
+def write_variant_table(path: Path, cfg: Config,
+                        coldspots: pd.DataFrame) -> int:
+    """Stream the input table and write each row's cold-spot membership.
+
+    Columns: the input's transcript, gene and protein_variant (or aa_pos)
+    columns, then ``gene_has_coldspot`` and ``variant_in_coldspot``. Both are
+    empty for training genes, which are never decoded. Reading in chunks
+    keeps memory flat; returns the number of rows written.
+    """
+    cols = cfg.columns
+    header = pd.read_csv(cfg.data.variant_csv, nrows=0).columns
+    pos_col = cols.aa_pos if cols.aa_pos in header else cols.protein_variant
+    keep = [c for c in (cols.transcript, cols.gene, pos_col) if c in header]
+    cold_genes = set(coldspots["gene"].astype(str))
+    excluded = cfg.exclude_genes
+    n = 0
+    # compresslevel 6 (gzip's usual default) instead of Python's 9: on the
+    # released table ~25% larger, but the run is ~45 s faster.
+    with gzip.open(path, "wt", newline="", compresslevel=6) as fh:
+        for i, chunk in enumerate(pd.read_csv(
+                cfg.data.variant_csv, usecols=keep, chunksize=1_000_000,
+                dtype={c: str for c in keep if c != cols.aa_pos})):
+            genes = chunk[cols.gene]
+            pos = (chunk[cols.aa_pos] if pos_col == cols.aa_pos
+                   else _parse_positions(chunk[pos_col], pos_col))
+            probe = pd.DataFrame({"gene": genes.values, "pos": pos.values})
+            inside = in_intervals(probe, coldspots, gene_col="gene",
+                                  aa_col="pos")
+            skip = genes.isin(excluded).values
+            has = pd.array(genes.isin(cold_genes).values, dtype="boolean")
+            ins = pd.array(inside, dtype="boolean")
+            has[skip] = pd.NA
+            ins[skip] = pd.NA
+            out = chunk[keep].assign(gene_has_coldspot=has,
+                                     variant_in_coldspot=ins)
+            out.to_csv(fh, index=False, header=(i == 0), na_rep="")
+            n += len(out)
+    return n
+
+
 def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
-                  runs: list, mave_col: str) -> dict[str, Path]:
+                  runs: list, data: LoadedData) -> dict[str, Path]:
     out_dir = Path(cfg.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     p = cfg.output.prefix
     written: dict[str, Path] = {}
 
-    # Plain-text tables are the archival record; the pickle is a convenience.
-    f = out_dir / f"{p}_intervals.csv"
-    coldspots.to_csv(f, index=False)
-    written["intervals"] = f
+    f = out_dir / f"{p}_regions.tsv"
+    regions_table(coldspots, cfg, data.transcripts).to_csv(
+        f, sep="\t", index=False)
+    written["regions"] = f
+
+    if cfg.output.variant_table:
+        f = out_dir / f"{p}_variants.csv.gz"
+        print(f"\nWriting per-variant membership to {f} ...")
+        write_variant_table(f, cfg, coldspots)
+        written["variants"] = f
 
     if ev is not None and not ev["coldspot_df_mave"].empty:
-        f = out_dir / f"{p}_intervals_mave_filtered.csv"
+        f = out_dir / f"{p}_regions_mave_filtered.csv"
         ev["coldspot_df_mave"].to_csv(f, index=False)
-        written["intervals_mave"] = f
+        written["regions_mave"] = f
 
     if ev is not None:
         f = out_dir / f"{p}_metrics.json"
@@ -417,9 +513,11 @@ def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
         "git_commit": _git_commit(),
         "config_fingerprint": cfg.fingerprint(),
         "config": _jsonable(cfg.to_dict()),
-        "resolved_mave_column": mave_col,
+        "resolved_mave_column": data.mave_col,
         "package_versions": _versions(),
         "trained_models": [params.summary() for _, params in runs],
+        "n_regions": int(len(coldspots)),
+        "n_genes_with_regions": int(coldspots["gene"].nunique()),
     }
     f = out_dir / f"{p}_manifest.json"
     f.write_text(json.dumps(manifest, indent=2, default=str))
@@ -445,8 +543,10 @@ def run(cfg: Config) -> dict:
     data = load_data(cfg)
     print(f"\n{'=' * 60}\n  DETECTION\n{'=' * 60}")
     coldspots, runs = detect(cfg, data.residues)
-    ev = evaluate(coldspots, data.clinvar_eval, data.mave_eval,
-                  cfg=cfg, mave_col=data.mave_col)
+    ev = None
+    if cfg.evaluation.enabled:
+        ev = evaluate(coldspots, data.clinvar_eval, data.mave_eval,
+                      cfg=cfg, mave_col=data.mave_col)
     report(cfg, coldspots, ev, data.clinvar_genes, data.mave_col)
-    written = write_outputs(cfg, coldspots, ev, runs, data.mave_col)
+    written = write_outputs(cfg, coldspots, ev, runs, data)
     return {"coldspots": coldspots, "eval": ev, "written": written}

@@ -19,15 +19,16 @@ def synth(tmp_path_factory):
     return make_synthetic(tmp_path_factory.mktemp("synth"), n_genes=40, seed=1)
 
 
-def _cfg(synth, out_dir, **extra):
+def _cfg(synth, out_dir, evaluate=True, **extra):
     overrides = {"data.variant_csv": str(synth["variants"]),
-                 "output.dir": str(out_dir), **extra}
+                 "output.dir": str(out_dir),
+                 "evaluation.enabled": evaluate, **extra}
     return load_config(REPO / "config" / "synthetic.yaml", overrides)
 
 
 def test_end_to_end_recovers_planted_cold_spots(synth, tmp_path):
     result = run(_cfg(synth, tmp_path))
-    for key in ("intervals", "metrics", "manifest", "pickle"):
+    for key in ("regions", "variants", "metrics", "manifest"):
         assert result["written"][key].exists()
 
     calls = result["coldspots"]
@@ -57,7 +58,7 @@ def test_end_to_end_recovers_planted_cold_spots(synth, tmp_path):
 def test_two_runs_give_identical_files(synth, tmp_path):
     a = run(_cfg(synth, tmp_path / "a"))["written"]
     b = run(_cfg(synth, tmp_path / "b", seed=7))["written"]
-    for key in ("intervals", "metrics"):
+    for key in ("regions", "metrics"):
         assert a[key].read_bytes() == b[key].read_bytes()
 
 
@@ -134,3 +135,46 @@ def test_old_two_table_config_gives_a_clear_error(tmp_path):
     cfg.write_text("data:\n  vep_residue_csv: a.csv\n  vep_expanded_csv: b.csv\n")
     with pytest.raises(KeyError, match="variant_csv"):
         load_config(cfg)
+
+
+def test_default_run_writes_regions_and_membership(synth, tmp_path):
+    """Evaluation off: regions TSV and per-variant membership, nothing else."""
+    result = run(_cfg(synth, tmp_path, evaluate=False))
+    assert result["eval"] is None
+    assert set(result["written"]) == {"regions", "variants", "manifest"}
+
+    regions = pd.read_csv(result["written"]["regions"], sep="\t")
+    assert list(regions.columns) == ["gene_symbol", "transcript_id",
+                                     "aa_start", "aa_end"]
+    assert len(regions) == len(result["coldspots"])
+    assert (regions["transcript_id"] == "ENST_" + regions["gene_symbol"]).all()
+
+    src = pd.read_csv(synth["variants"], low_memory=False)
+    out = pd.read_csv(result["written"]["variants"], low_memory=False,
+                      dtype={"gene_has_coldspot": "boolean",
+                             "variant_in_coldspot": "boolean"})
+    assert list(out.columns) == ["transcript_id", "gene_symbol",
+                                 "protein_variant", "gene_has_coldspot",
+                                 "variant_in_coldspot"]
+    assert len(out) == len(src)
+    assert (out["protein_variant"].values == src["protein_variant"].values).all()
+
+    brca1 = out["gene_symbol"] == "BRCA1"
+    assert out.loc[brca1, ["gene_has_coldspot", "variant_in_coldspot"]].isna().all().all()
+    rest = out[~brca1].copy()
+    rest["aa_pos"] = rest["protein_variant"].str[1:-1].astype(int)
+    expected = in_intervals(rest, regions.rename(columns={"gene_symbol": "gene"}),
+                            gene_col="gene_symbol", aa_col="aa_pos")
+    assert (rest["variant_in_coldspot"].astype(bool).values == expected).all()
+    has = rest["gene_symbol"].isin(set(regions["gene_symbol"]))
+    assert (rest["gene_has_coldspot"].astype(bool) == has).all()
+
+
+def test_label_columns_not_needed_when_evaluation_is_off(synth, tmp_path):
+    df = pd.read_csv(synth["variants"], low_memory=False)
+    path = tmp_path / "no_labels.csv"
+    df.drop(columns=["CLNSIG", "functional_assignment"]).to_csv(path, index=False)
+    a = run(_cfg(synth, tmp_path / "a", evaluate=False))["coldspots"]
+    b = run(_cfg(synth, tmp_path / "b", evaluate=False,
+                 **{"data.variant_csv": str(path)}))["coldspots"]
+    pd.testing.assert_frame_equal(a, b)

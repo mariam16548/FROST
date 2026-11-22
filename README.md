@@ -1,14 +1,22 @@
 # Find Regions Of Substitution Tolerance (FROST)
 
-Detection and evaluation of **mutational coldspots** — contiguous protein
-regions depleted of pathogenic variation — using a two-state Gaussian hidden
-Markov model over variant-effect-predictor and conservation scores.
+Detection of **mutational coldspots** — contiguous protein regions depleted
+of pathogenic variation — using a two-state Gaussian hidden Markov model over
+variant-effect-predictor and conservation scores.
 
 Model parameters are estimated once, in closed form, from a single labelled
-region in **BRCA1**, then applied unchanged to every other gene. BRCA1 is
-excluded from all evaluation. Predicted coldspots are assessed against
-(1) ClinVar clinical significance and (2) multiplexed assay of variant effect
-(MAVE) functional calls.
+region in **BRCA1**, then applied unchanged to every other gene.
+
+Running it on the released table reproduces the published results:
+
+* **the coldspot regions** (`*_regions.tsv`: gene, transcript, `aa_start`,
+  `aa_end`), and
+* **the per-variant membership columns** `gene_has_coldspot` and
+  `variant_in_coldspot` (`*_variants.csv.gz`, one row per input row).
+
+An optional analysis (`--evaluate`) also tests the regions against ClinVar
+clinical significance and multiplexed assay of variant effect (MAVE)
+functional calls.
 
 This repository contains the code accompanying:
 
@@ -34,19 +42,25 @@ pip install -e .
 python scripts/make_synthetic_data.py
 python -m coldspots.cli --config config/synthetic.yaml
 
-# 2. Reproduce the published analysis
+# 2. Reproduce the published regions and membership columns
 #    Download variant_level_coldspots.csv.gz from Zenodo (see docs/DATA.md)
 #    into data/, then:
 python -m coldspots.cli --config config/default.yaml
+
+# Optional: the ClinVar / MAVE enrichment analysis
+python -m coldspots.cli --config config/default.yaml --evaluate
 python -m coldspots.cli --config config/sensitivity_position_level.yaml
 ```
 
 Run the commands from the repository root: paths in the configs are relative
 to the directory you run from. After `pip install -e .`, `frost` works as a
 shorter alias for `python -m coldspots.cli`. If the table is elsewhere, pass
-`--variant-csv /path/to/variant_level_coldspots.csv.gz`. The full run takes
-about 30 seconds and 2.5 GB of memory on a laptop, and should report
-**2,729 coldspots in 1,336 genes**.
+`--variant-csv /path/to/variant_level_coldspots.csv.gz`. The run takes about
+a minute and 2.5 GB of memory on a laptop, and should report **2,729
+coldspots in 1,336 genes**. `results/coldspots_regions.tsv` then matches the
+published regions table (its protein-coordinate columns), and
+`results/coldspots_variants.csv.gz` matches the table's own
+`gene_has_coldspot` / `variant_in_coldspot` columns on every row.
 
 To run the tests: `pytest` (installed by `requirements.txt`).
 
@@ -86,7 +100,7 @@ docs/
 
 1. **Load.** The input table has one row per missense substitution. Its
    per-residue scores are collapsed to one row per residue for training and
-   detection; the evaluations use the substitution-level rows.
+   detection.
 2. **Train.** For each feature, residues inside the labelled BRCA1 interval
    (residues 224–1366) are treated as the cold state and the rest of the
    protein as the hot state. Per-state means and variances, initial-state
@@ -98,8 +112,10 @@ docs/
    is not retrained — it is the same model, viewed in fewer dimensions.
 4. **Detect.** Viterbi decoding per gene. Cold runs spanning fewer than 40
    amino acids are discarded.
-5. **Evaluate.** ClinVar and MAVE enrichment, with cold-spot membership
-   recomputed from the intervals this run produced.
+5. **Write.** The regions, and each substitution's membership
+   (`variant_in_coldspot`) and its gene's (`gene_has_coldspot`). Training
+   genes (BRCA1) are left empty in both columns.
+6. **Evaluate (optional).** ClinVar and MAVE enrichment of the regions.
 
 See [docs/METHODS.md](docs/METHODS.md) for the full description.
 
@@ -118,6 +134,7 @@ not the code. The main knobs:
 | `training.intervals` | `BRCA1: [[224, 1366]]` | Labelled cold region(s) used for parameter estimation |
 | `training.exclude_genes` | `[BRCA1]` | Never decoded; removed from both evaluations |
 | `detection.min_cold_run` | `40` | Minimum cold-run span, in amino acids |
+| `evaluation.enabled` | `false` | Run the optional ClinVar / MAVE analysis (also `--evaluate`) |
 | `evaluation.min_mave_positions` | `10` | Distinct assayed PLP/BLB positions required |
 | `evaluation.mave_filter_level` | `gene` | Apply that threshold per gene or per interval |
 | `evaluation.unit` | `variant` | Counting unit for the enrichment tests |
@@ -141,15 +158,19 @@ Written to `output.dir`, prefixed with `output.prefix`:
 
 | File | Contents |
 | --- | --- |
-| `*_intervals.csv` | Every predicted cold spot: gene, `aa_start`, `aa_end`, `length`, `n_residues_scored`, and which model produced it |
-| `*_intervals_mave_filtered.csv` | The subset passing the MAVE support filter, with per-region assay counts and `frac_assayed` |
-| `*_metrics.json` | All reported statistics, including the raw 2×2 tables behind each odds ratio |
-| `*_manifest.json` | Git commit (marked `-dirty` if the code had uncommitted changes), config fingerprint, full resolved config, package versions, and the fitted HMM parameters |
-| `*.pkl` | Pickled bundle of the above, as a convenience |
+| `*_regions.tsv` | Every predicted cold spot: `gene_symbol`, `transcript_id`, `aa_start`, `aa_end` (the published regions table's protein-coordinate columns) |
+| `*_variants.csv.gz` | One row per input row: `transcript_id`, `gene_symbol`, `protein_variant`, `gene_has_coldspot`, `variant_in_coldspot` (empty for training genes) |
+| `*_manifest.json` | Git commit (marked `-dirty` if the code had uncommitted changes), config fingerprint, full resolved config, package versions, the fitted HMM parameters, and region counts |
 
-The CSV and JSON files are the archival record. The pickle is a convenience and
-is not guaranteed to load across pandas versions — **do not rely on it for
-long-term reproducibility.**
+With `--evaluate`, also:
+
+| File | Contents |
+| --- | --- |
+| `*_regions_mave_filtered.csv` | Regions passing the MAVE support filter, with per-region assay counts and `frac_assayed` |
+| `*_metrics.json` | All reported statistics, including the raw 2×2 tables behind each odds ratio |
+
+`output.variant_table: false` skips the per-variant file; `output.write_pickle:
+true` adds a pickled bundle (not guaranteed to load across pandas versions).
 
 ---
 
@@ -174,7 +195,8 @@ long-term reproducibility.**
 ## Caveats a reader should know about
 
 These are properties of the method, not bugs. They are documented so that the
-numbers are read correctly.
+numbers are read correctly. Caveats 1, 2, 6, 7 and 8 concern the optional
+evaluation.
 
 1. **Variant-level counting inflates the sample size.** By default each row of
    the table (one substitution) is one observation, so a residue with three

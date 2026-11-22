@@ -54,8 +54,18 @@ def test_cli_end_to_end(tmp_path, capsys):
                "--variant-csv", str(paths["variants"]),
                "--out-dir", str(tmp_path / "out"), "--prefix", "cli"])
     assert rc == 0
-    assert (tmp_path / "out" / "cli_intervals.csv").exists()
+    assert (tmp_path / "out" / "cli_regions.tsv").exists()
+    assert (tmp_path / "out" / "cli_variants.csv.gz").exists()
+    assert not (tmp_path / "out" / "cli_metrics.json").exists()
     assert "Done." in capsys.readouterr().out
+
+
+def test_cli_evaluate_flag(tmp_path):
+    paths = make_synthetic(tmp_path / "synth", n_genes=20, seed=3)
+    main(["--config", str(REPO / "config" / "synthetic.yaml"),
+          "--variant-csv", str(paths["variants"]), "--evaluate",
+          "--out-dir", str(tmp_path / "out"), "--prefix", "cli"])
+    assert (tmp_path / "out" / "cli_metrics.json").exists()
 
 
 def test_p_value_display():

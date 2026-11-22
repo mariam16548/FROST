@@ -1,8 +1,10 @@
 # Sensitivity analysis: pseudo-replication control.
 #
-# Differs from config/default.yaml in exactly two settings:
+# Turns on the (optional) ClinVar / MAVE evaluation and differs from the
+# evaluation settings in config/default.yaml in exactly two places:
 #   evaluation.unit              variant  -> position
 #   evaluation.mave_filter_level gene     -> interval
+# The cold-spot regions are the same as with config/default.yaml.
 #
 # Rationale: the input table holds one row per substitution, so a residue with
 # several classified substitutions contributes several rows to Fisher's exact
@@ -30,6 +32,7 @@ columns:
     - mave_class
     - MAVE_class
   gene: gene_symbol
+  transcript: transcript_id   # copied into the regions table
   # Parsed from protein_variant (e.g. "C2R" -> 2) when the table has no
   # aa_pos column.
   aa_pos: aa_pos
@@ -58,6 +61,9 @@ detection:
   min_cold_run: 40
 
 evaluation:
+  # Optional ClinVar / MAVE enrichment analysis (odds ratios). The settings
+  # below only matter when it is on. Turn on here or with --evaluate.
+  enabled: true
   min_class_count: 0        # 0 = no ClinVar gene filter
   min_mave_positions: 10
   min_mave_coverage: 0.0    # 0 = off
@@ -70,6 +76,7 @@ evaluation:
 output:
   dir: results
   prefix: coldspots_position_level
-  write_pickle: true
+  variant_table: false       # per-variant gene_has_coldspot / variant_in_coldspot
+  write_pickle: false
 
 seed: 42
