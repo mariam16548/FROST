@@ -15,7 +15,7 @@ This repository contains the code accompanying:
 > *[preprint citation]*
 
 The only input is one table, archived on Zenodo:
-[doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228).
+[doi:10.5281/zenodo.24398228](https://doi.org/10.5281/zenodo.24398228) [variant_level_coldspots.csv.gz].
 
 ---
 
