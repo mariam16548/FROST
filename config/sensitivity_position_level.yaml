@@ -79,4 +79,3 @@ output:
   variant_table: false       # per-variant gene_has_coldspot / variant_in_coldspot
   write_pickle: false
 
-seed: 42

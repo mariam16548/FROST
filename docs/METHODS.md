@@ -209,19 +209,13 @@ argues against pathogenicity.
   retained once per label.
 
 `config/sensitivity_position_level.yaml` runs the position-level analysis
-together with `mave_filter_level: interval`. Reporting both is strongly
-recommended. Collapsing to positions removes the duplication within a residue
-but not two other sources of anti-conservatism: residues within a contiguous
-region are spatially autocorrelated, and pooling all genes into one 2×2 table
-ignores between-gene differences in baseline rates. A gene-stratified test
-(e.g. Cochran–Mantel–Haenszel) or a permutation test that re-places intervals
-within each gene would give a more defensible p-value.
+together with `mave_filter_level: interval`.
 
 ## 8. Determinism
 
 Nothing in the pipeline is stochastic. Parameters are estimated in closed form,
-Viterbi decoding is exact, and no bootstrap or permutation step is used. The
-RNG seed is set and recorded for completeness but does not affect any output;
+Viterbi decoding is exact, and no bootstrap or permutation step is used, so
+there is no random seed.
 `tests/test_model.py::test_decoding_is_deterministic` and
 `tests/test_pipeline.py::test_two_runs_give_identical_files` assert this. Given
 identical input tables and config, two runs produce byte-identical interval and

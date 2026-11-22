@@ -57,7 +57,7 @@ def test_end_to_end_recovers_planted_cold_spots(synth, tmp_path):
 
 def test_two_runs_give_identical_files(synth, tmp_path):
     a = run(_cfg(synth, tmp_path / "a"))["written"]
-    b = run(_cfg(synth, tmp_path / "b", seed=7))["written"]
+    b = run(_cfg(synth, tmp_path / "b"))["written"]
     for key in ("regions", "metrics"):
         assert a[key].read_bytes() == b[key].read_bytes()
 

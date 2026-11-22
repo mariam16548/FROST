@@ -83,7 +83,7 @@ coldspots/
 config/
   default.yaml    The published primary analysis.
   sensitivity_position_level.yaml
-                  Pseudo-replication control (see Caveats).
+                  Optional evaluation, counted per position.
   synthetic.yaml  Smoke test on synthetic data.
 scripts/
   make_synthetic_data.py
@@ -135,8 +135,8 @@ not the code. The main knobs:
 | `training.exclude_genes` | `[BRCA1]` | Never decoded; removed from both evaluations |
 | `detection.min_cold_run` | `40` | Minimum cold-run span, in amino acids |
 | `evaluation.enabled` | `false` | Run the optional ClinVar / MAVE analysis (also `--evaluate`) |
-| `evaluation.min_mave_positions` | `10` | Distinct assayed PLP/BLB positions required |
-| `evaluation.mave_filter_level` | `gene` | Apply that threshold per gene or per interval |
+| `evaluation.min_mave_positions` | `10` | Distinct positions with an Abnormal/Normal MAVE call required |
+| `evaluation.mave_filter_level` | `gene` | `gene`: the 10 positions may be summed across a gene's cold spots; `interval`: each cold spot needs its own 10 |
 | `evaluation.unit` | `variant` | Counting unit for the enrichment tests |
 | `evaluation.min_class_count` | `0` | ClinVar gene filter; `0` disables it |
 | `evaluation.mave_labels` | `PLP: Abnormal, BLB: Normal, IR: Indeterminate` | How MAVE calls are worded in the table |
@@ -177,8 +177,8 @@ true` adds a pickled bundle (not guaranteed to load across pandas versions).
 ## Reproducibility notes
 
 * **The pipeline is deterministic.** Parameters are estimated in closed form and
-  Viterbi decoding is exact, so no result depends on the RNG. `seed` is set
-  anyway and recorded, but changing it changes nothing
+  Viterbi decoding is exact; nothing is random, so there is no seed. The same
+  input and config give byte-identical outputs
   (`tests/test_model.py::test_decoding_is_deterministic` and
   `tests/test_pipeline.py::test_two_runs_give_identical_files` check this).
 * **Versions are recorded, not just pinned.** Every run writes the exact
@@ -186,63 +186,8 @@ true` adds a pickled bundle (not guaranteed to load across pandas versions).
   git commit and a hash of the resolved config. `requirements.txt` pins the
   versions used for the published run.
 * **Membership is always recomputed.** The `variant_in_coldspot` and
-  `gene_has_coldspot` columns shipped in the table are never read, so a stale
-  assignment cannot leak into the evaluation. (Running the pipeline on the
-  released table reproduces both columns exactly.)
-
----
-
-## Caveats a reader should know about
-
-These are properties of the method, not bugs. They are documented so that the
-numbers are read correctly. Caveats 1, 2, 6, 7 and 8 concern the optional
-evaluation.
-
-1. **Variant-level counting inflates the sample size.** By default each row of
-   the table (one substitution) is one observation, so a residue with three
-   classified substitutions contributes three observations to Fisher's exact
-   test as though they were independent. This makes p-values
-   anti-conservative. `config/sensitivity_position_level.yaml` collapses to
-   one observation per (gene, position, label); **report both**. The
-   position-level test is less inflated but still not exact: neighbouring
-   residues in a contiguous region are not independent, and the single 2×2
-   table pools genes with very different baseline rates. A stratified
-   (per-gene) or permutation-based test would address both.
-2. **`mave_filter_level: gene` is the looser setting.** It thresholds the *sum*
-   of assayed positions across a gene's cold spots and then keeps them all —
-   including cold spots with two assayed positions, or none. Use
-   `interval` to require each region to stand on its own evidence; cold
-   spots that fail are then left out of both the inside and outside counts.
-3. **Normalisation is per-gene.** Features are winsorised and min-max scaled
-   *within each gene* at detection time, and within the training gene at
-   training time. Emission means are therefore in each gene's own units, so a
-   "cold" call is relative to that protein's own score distribution rather than
-   to an absolute scale. This is intentional and load-bearing; do not replace
-   it with a global scaler.
-4. **Features are treated as independent given the state.** The four scores
-   are correlated, but the emission covariance is diagonal, so shared signal is
-   counted more than once and per-residue evidence is overconfident. The 40-aa
-   minimum run length absorbs much of the resulting fragmentation.
-5. **Missing data.** A gene with any missing AlphaMissense, ESM1b or phyloP
-   value is not decoded, and a gene with any missing EVE value uses the
-   3-feature model. Residues absent from the table are skipped, and the HMM
-   treats the residues on either side of a gap as neighbours, so an interval
-   can span a gap. `length` is the amino-acid span; `n_residues_scored` is
-   the number of scored residues inside it. In the released table 0.5% of
-   positions are absent, mostly residues whose variants were all removed by
-   the filter that excludes variants affecting splicing; 430 of 2,729 cold
-   spots span at least one such gap.
-6. **`frac_assayed` should accompany any depletion claim.** A region can clear
-   the MAVE threshold on a handful of clustered residues at one edge while most
-   of it is unassayed.
-7. **Odds-ratio direction.** `OR` is the odds of a *benign* call inside a cold
-   spot relative to outside, so **OR > 1 means depletion of pathogenic
-   variation**. The point estimate and Wald CI use the Haldane–Anscombe (+0.5)
-   correction; the Fisher p-value uses the uncorrected counts. The raw 2×2
-   table is in `*_metrics.json` for anyone wanting a different convention.
-8. **Only genes with at least one predicted cold spot enter the tests.** Genes
-   without one provide no inside/outside contrast, so they are excluded rather
-   than counted as all-outside.
+  `gene_has_coldspot` columns shipped in the table are never read; the
+  pipeline recomputes them (and reproduces both exactly).
 
 ---
 

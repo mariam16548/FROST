@@ -40,7 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
                    type=float, help="minimum assayed fraction of a cold spot")
     p.add_argument("--min-cold-run", dest="detection.min_cold_run", type=int,
                    help="minimum cold-run span in amino acids")
-    p.add_argument("--seed", dest="seed", type=int)
     return p
 
 

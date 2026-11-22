@@ -539,7 +539,6 @@ def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
 # ----------------------------------------------------------------------------
 def run(cfg: Config) -> dict:
     """Execute the full pipeline and return the results bundle."""
-    np.random.seed(cfg.seed)  # decoding is deterministic; set for good measure
     data = load_data(cfg)
     print(f"\n{'=' * 60}\n  DETECTION\n{'=' * 60}")
     coldspots, runs = detect(cfg, data.residues)

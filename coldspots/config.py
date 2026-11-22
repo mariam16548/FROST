@@ -146,7 +146,6 @@ class Config:
     detection: Detection = field(default_factory=Detection)
     evaluation: Evaluation = field(default_factory=Evaluation)
     output: Output = field(default_factory=Output)
-    seed: int = 42
 
     # -- derived -----------------------------------------------------------
     @property
@@ -285,7 +284,6 @@ def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Co
     cfg = Config(
         data=DataPaths(**raw["data"]),
         **{name: cls(**raw.get(name, {})) for name, cls in _SECTIONS.items()},
-        seed=raw.get("seed", 42),
     )
     if isinstance(cfg.features.winsorize, list):
         cfg.features.winsorize = tuple(cfg.features.winsorize)
