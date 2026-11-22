@@ -1,15 +1,10 @@
-"""Synthetic input table for smoke-testing the pipeline without real data.
+"""Synthetic input table, in the layout of docs/DATA.md, for testing.
 
-The generated table follows the schema in ``docs/DATA.md`` (the same layout
-as the released variant-level table). Every gene gets a
-latent per-residue state (cold or hot) with zero, one or two planted cold
-intervals; the four predictor scores are noisy, correlated functions of that
-state, and ClinVar / MAVE labels are drawn with a lower pathogenic rate inside
-the planted cold intervals. The planted intervals are written to
-``truth.csv`` so that detection accuracy can be checked.
-
-The numbers this produces say nothing about real proteins; the point is only
-that the pipeline runs end to end and recovers what was planted.
+Each gene gets zero to two planted coldspots. The four scores are noisy
+functions of the planted state, and ClinVar / MAVE labels are less often
+pathogenic inside planted coldspots. The planted intervals are written to
+``truth.csv``. The data is for checking that FROST runs and recovers what was
+planted; it says nothing about real proteins.
 """
 from __future__ import annotations
 

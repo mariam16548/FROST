@@ -1,6 +1,6 @@
-"""FROST: mutational cold-spot detection with a two-state Gaussian HMM."""
+"""FROST: Find Regions Of Substitution Tolerance."""
 from .config import Config, load_config
-from .pipeline import run, load_data, detect
+from .pipeline import detect, load_data, run
 
 __version__ = "1.0.0"
 __all__ = ["Config", "load_config", "run", "load_data", "detect"]

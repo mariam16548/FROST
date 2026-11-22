@@ -1,11 +1,8 @@
-"""Write synthetic input tables to data/synthetic/ for a quick smoke test.
+"""Write a small synthetic input table to data/synthetic/ for a quick test.
 
     python scripts/make_synthetic_data.py
-    python -m coldspots.cli --config config/synthetic.yaml
-
-See coldspots/synthetic.py for what the data contains. Run from the
-repository root: config/synthetic.yaml reads data/synthetic/ relative to the
-current directory.
+    frost --config config/default.yaml \
+        --variant-csv data/synthetic/variants.csv.gz --out-dir results/synthetic
 """
 from __future__ import annotations
 

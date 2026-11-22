@@ -1,15 +1,10 @@
-"""Configuration objects for the cold-spot pipeline.
-
-All tunable parameters and every filesystem path live here (or in the YAML
-file that populates these objects). No path is hard-coded anywhere else in
-the package, so a third party can reproduce a run by editing one file.
-"""
+"""Settings, loaded from a YAML file (see config/default.yaml)."""
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -20,98 +15,64 @@ __all__ = ["Config", "load_config"]
 
 @dataclass
 class DataPaths:
-    # The single variant-level input table (CSV, optionally .gz): one row per
-    # missense substitution, carrying the per-residue predictor scores plus
-    # ClinVar and MAVE calls. The per-residue table used for training and
-    # detection is derived from it; both evaluations run on it directly.
-    # See docs/DATA.md for the schema.
+    # The input table: one row per missense substitution (docs/DATA.md).
     variant_csv: str
 
 
 @dataclass
 class Columns:
-    clinvar: str = "CLNSIG"
-    mave: str = "functional_assignment"
-    # Tried in order if `mave` is absent; the resolved name is recorded in the
-    # run manifest.
-    mave_candidates: list[str] = field(
-        default_factory=lambda: [
-            "functional_assignment", "ExC_assignment", "assignment",
-            "mave_assignment", "MAVE_assignment", "mave_class", "MAVE_class",
-        ]
-    )
     gene: str = "gene_symbol"
-    # Amino-acid position. If the table has no such column, it is parsed from
-    # `protein_variant` (e.g. "C2R" -> 2).
+    transcript: str = "transcript_id"      # copied into the outputs
+    # The position is read from protein_variant (e.g. "C2R" -> 2) unless the
+    # table has an aa_pos column.
     aa_pos: str = "aa_pos"
     protein_variant: str = "protein_variant"
-    # Precomputed membership columns that may ship with the table. They are
-    # never read, so cold-spot membership is always recomputed from the
-    # intervals produced by the current run.
-    drop_precomputed: list[str] = field(
-        default_factory=lambda: [
-            "variant_in_coldspot", "gene_has_coldspot",
-            "in_coldspot", "in_coldspot_bw",
-        ]
-    )
+    clinvar: str = "CLNSIG"                 # --evaluate only
+    mave: str = "functional_assignment"     # --evaluate only
 
 
 @dataclass
 class Features:
-    # Feature order matters: the first feature defines which HMM state is
-    # labelled "cold" (the state with the lower mean).
+    # Per-residue scores. The labelled training region must have the lower
+    # mean on the first feature (AlphaMissense), which defines the Cold state.
     primary: list[str] = field(
         default_factory=lambda: [
             "max_AlphaMissense", "min_ESM1b", "max_EVE", "max_phyloP",
         ]
     )
-    # Features dropped (by marginalising the trained Gaussian) to build the
-    # fallback model used for genes missing any value of those scores.
+    # Genes with any missing value of these features use the others.
     fallback_drop: list[str] = field(default_factory=lambda: ["max_EVE"])
-    # Features whose sign is flipped so that "higher == more damaging" holds
-    # for every feature before normalisation.
+    # Sign-inverted so that higher = more deleterious for every feature.
     invert: list[str] = field(default_factory=lambda: ["min_ESM1b"])
-    # Winsorisation percentiles applied before min-max scaling.
+    # Percentiles each feature is clipped to before min-max scaling.
     winsorize: tuple[float, float] = (1.0, 99.0)
 
 
 @dataclass
 class Training:
-    # gene -> list of [start, end] amino-acid intervals treated as cold
-    # (state 0) when estimating emission and transition parameters.
+    # gene -> [start, end] amino-acid intervals labelled Cold.
     intervals: dict[str, list[list[int]]] = field(
         default_factory=lambda: {"BRCA1": [[224, 1366]]}
     )
-    # Genes never decoded, and always removed from both evaluation sets.
+    # Never decoded or evaluated.
     exclude_genes: list[str] = field(default_factory=lambda: ["BRCA1"])
 
 
 @dataclass
 class Detection:
-    # Minimum span, in amino-acid coordinates, of a retained cold run.
+    # Cold runs spanning fewer positions are reassigned to Not-Cold.
     min_cold_run: int = 40
 
 
 @dataclass
 class Evaluation:
-    # ClinVar gene filter: keep genes with >= this many PLP and BLB rows.
-    # 0 disables the filter.
-    min_class_count: int = 0
-    # MAVE cold-spot filter: distinct aa positions carrying a PLP/BLB call.
+    # Benchmarking against ClinVar and MAVE data (--evaluate).
+    enabled: bool = False
+    # A gene enters the MAVE evaluation if its abnormal/normal calls cover at
+    # least this many distinct positions inside its coldspots, summed across
+    # all of its coldspots.
     min_mave_positions: int = 10
-    # Minimum fraction of a region with any MAVE call. 0 disables.
-    min_mave_coverage: float = 0.0
-    # "gene": threshold the sum over a gene's cold spots and keep them all if
-    #         the gene clears it.
-    # "interval": each cold spot must clear the threshold on its own.
-    mave_filter_level: str = "gene"
-    # "variant":  count one observation per row of the input table.
-    # "position": collapse to one observation per (gene, aa_pos, label).
-    # See docs/METHODS.md - "variant" is the primary analysis, "position" is
-    # the pseudo-replication sensitivity analysis.
-    unit: str = "variant"
-    # Canonical name -> label as it appears in the data. PLP and BLB are
-    # required; any other entries are reported but not tested.
+    # Canonical name -> label as written in the table.
     clinvar_labels: dict[str, str] = field(
         default_factory=lambda: {"PLP": "PLP", "BLB": "BLB", "VUS": "VUS"}
     )
@@ -125,7 +86,6 @@ class Evaluation:
 class Output:
     dir: str = "results"
     prefix: str = "coldspots"
-    write_pickle: bool = True
 
 
 @dataclass
@@ -137,12 +97,9 @@ class Config:
     detection: Detection = field(default_factory=Detection)
     evaluation: Evaluation = field(default_factory=Evaluation)
     output: Output = field(default_factory=Output)
-    seed: int = 42
 
-    # -- derived -----------------------------------------------------------
     @property
     def fallback_features(self) -> list[str]:
-        """Primary feature list minus the marginalised features."""
         return [f for f in self.features.primary
                 if f not in self.features.fallback_drop]
 
@@ -161,54 +118,79 @@ class Config:
         return set(self.training.exclude_genes)
 
     def validate(self) -> None:
-        e = self.evaluation
-        if e.mave_filter_level not in ("gene", "interval"):
-            raise ValueError(
-                f"evaluation.mave_filter_level must be 'gene' or 'interval', "
-                f"got {e.mave_filter_level!r}"
-            )
-        if e.unit not in ("variant", "position"):
-            raise ValueError(
-                f"evaluation.unit must be 'variant' or 'position', "
-                f"got {e.unit!r}"
-            )
-        if not self.features.primary:
+        f, e = self.features, self.evaluation
+        if not f.primary:
             raise ValueError("features.primary must not be empty")
-        missing = [f for f in self.features.fallback_drop
-                   if f not in self.features.primary]
-        if missing:
-            raise ValueError(
-                f"features.fallback_drop entries not in features.primary: "
-                f"{missing}"
-            )
-        if not self.fallback_features:
-            raise ValueError("fallback_drop removes every feature")
-        for name, labels in (("clinvar_labels", e.clinvar_labels),
-                             ("mave_labels", e.mave_labels)):
-            if not {"PLP", "BLB"} <= set(labels):
+        if len(set(f.primary)) != len(f.primary):
+            raise ValueError("features.primary contains duplicates")
+        for name in ("fallback_drop", "invert"):
+            bad = [x for x in getattr(f, name) if x not in f.primary]
+            if bad:
                 raise ValueError(
-                    f"evaluation.{name} must map both PLP and BLB to the "
-                    f"labels used in the data, got {labels}"
-                )
-        if self.detection.min_cold_run < 1:
-            raise ValueError("detection.min_cold_run must be >= 1")
+                    f"features.{name} entries not in features.primary: {bad}")
+        if not self.fallback_features:
+            raise ValueError("features.fallback_drop removes every feature")
+        if (len(f.winsorize) != 2
+                or not all(_is_number(x) for x in f.winsorize)
+                or not 0 <= f.winsorize[0] < f.winsorize[1] <= 100):
+            raise ValueError(
+                f"features.winsorize must be [low, high] with "
+                f"0 <= low < high <= 100, got {list(f.winsorize)}")
+
+        if not self.training.intervals:
+            raise ValueError("training.intervals must not be empty")
         for gene, ivs in self.training.intervals.items():
-            for iv in ivs:
-                if len(iv) != 2 or iv[0] > iv[1]:
-                    raise ValueError(
-                        f"bad training interval for {gene}: {iv}"
-                    )
+            if not isinstance(ivs, list) or not all(
+                    isinstance(iv, (list, tuple)) and len(iv) == 2
+                    and all(_is_int(x) for x in iv) and iv[0] <= iv[1]
+                    for iv in ivs):
+                raise ValueError(
+                    f"training.intervals.{gene} must be a list of "
+                    f"[start, end] pairs, e.g. [[224, 1366]]; got {ivs}")
+        not_excluded = [g for g in self.training.intervals
+                        if g not in self.training.exclude_genes]
+        if not_excluded:
+            raise ValueError(
+                f"training gene(s) {not_excluded} must also be listed in "
+                f"training.exclude_genes")
+
+        if not _is_int(self.detection.min_cold_run) \
+                or self.detection.min_cold_run < 1:
+            raise ValueError("detection.min_cold_run must be a whole "
+                             "number >= 1")
+        if not isinstance(e.enabled, bool):
+            raise ValueError("evaluation.enabled must be true or false")
+        if not _is_int(e.min_mave_positions) or e.min_mave_positions < 1:
+            raise ValueError("evaluation.min_mave_positions must be a whole "
+                             "number >= 1")
+        for name in ("clinvar_labels", "mave_labels"):
+            labels = getattr(e, name)
+            if not {"PLP", "BLB"} <= set(labels):
+                raise ValueError(f"evaluation.{name} must map both PLP and "
+                                 f"BLB, got {labels}")
+            if labels["PLP"] == labels["BLB"]:
+                raise ValueError(f"evaluation.{name}: PLP and BLB map to the "
+                                 f"same label {labels['PLP']!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def fingerprint(self) -> str:
-        """Stable hash of the resolved config, recorded in the run manifest."""
+        """Short hash of the settings, recorded in the run manifest."""
         blob = json.dumps(self.to_dict(), sort_keys=True, default=str)
         return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
+def _is_int(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _is_number(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
 _SECTIONS = {
+    "data": DataPaths,
     "columns": Columns,
     "features": Features,
     "training": Training,
@@ -218,38 +200,49 @@ _SECTIONS = {
 }
 
 
-def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
+def _build(section: str, cls, values) -> Any:
+    values = values or {}
+    if not isinstance(values, dict):
+        raise ValueError(f"config section '{section}' must be a mapping")
+    known = {f.name for f in fields(cls)}
+    unknown = sorted(set(values) - known)
+    if unknown:
+        raise ValueError(f"unknown setting(s) in '{section}': {unknown}; "
+                         f"allowed: {sorted(known)}")
+    return cls(**values)
+
+
+def load_config(path: str | Path,
+                overrides: dict[str, Any] | None = None) -> Config:
     """Load a YAML config, apply dotted-key overrides, and validate it.
 
-    ``overrides`` keys use dotted paths, e.g. ``{"evaluation.unit": "position"}``.
+    ``overrides`` keys use dotted paths, e.g. ``{"output.dir": "results/run2"}``.
     """
     path = Path(path)
     with open(path) as fh:
-        raw = yaml.safe_load(fh) or {}
-    raw = copy.deepcopy(raw)
+        raw = copy.deepcopy(yaml.safe_load(fh) or {})
 
     for dotted, value in (overrides or {}).items():
         if value is None:
             continue
         node = raw
-        parts = dotted.split(".")
-        for p in parts[:-1]:
-            node = node.setdefault(p, {})
-        node[parts[-1]] = value
+        *parents, leaf = dotted.split(".")
+        for p in parents:
+            if not isinstance(node.get(p), dict):
+                node[p] = {}
+            node = node[p]
+        node[leaf] = value
 
-    if "data" not in raw:
-        raise KeyError(f"{path}: missing required 'data' section")
-    if "variant_csv" not in raw["data"]:
-        raise KeyError(
-            f"{path}: 'data' must set variant_csv, the single variant-level "
-            f"table (see docs/DATA.md). The older two-table layout "
-            f"(vep_residue_csv + vep_expanded_csv) is no longer supported."
-        )
-    cfg = Config(
-        data=DataPaths(**raw["data"]),
-        **{name: cls(**raw.get(name, {})) for name, cls in _SECTIONS.items()},
-        seed=raw.get("seed", 42),
-    )
+    unknown = sorted(set(raw) - set(_SECTIONS))
+    if unknown:
+        raise ValueError(f"{path}: unknown section(s) {unknown}; "
+                         f"allowed: {sorted(_SECTIONS)}")
+    if not (raw.get("data") or {}).get("variant_csv"):
+        raise ValueError(f"{path}: data.variant_csv (the input table) "
+                         f"is required")
+    built = {name: _build(name, cls, raw.get(name))
+             for name, cls in _SECTIONS.items()}
+    cfg = Config(**built)
     if isinstance(cfg.features.winsorize, list):
         cfg.features.winsorize = tuple(cfg.features.winsorize)
     cfg.validate()

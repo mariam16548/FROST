@@ -1,20 +1,25 @@
 cff-version: 1.2.0
 title: "FROST: Find Regions Of Substitution Tolerance"
-message: "If you use this software, please cite both the software and the paper."
+message: "If you use this software, please cite the paper."
 type: software
 version: 1.0.0
 license: MIT
 repository-code: "https://github.com/mariam16548/FROST"
 authors:
-  - family-names: TODO
-    given-names: TODO
-    orcid: "https://orcid.org/0000-0000-0000-0000"
+  - family-names: Benazouz
+    given-names: Mariam
 preferred-citation:
   type: article
-  title: "TODO: paper title"
+  title: "Scalable identification of mutationally tolerant regions in 1,336 disease-associated genes"
   year: 2026
-  journal: "TODO"
-  doi: "TODO"
   authors:
-    - family-names: TODO
-      given-names: TODO
+    - {family-names: Benazouz, given-names: Mariam}
+    - {family-names: Fayer, given-names: Shawn}
+    - {family-names: McEwen, given-names: Abbye E.}
+    - {family-names: Stone, given-names: Jeremy}
+    - {family-names: Gupta, given-names: Pankhuri}
+    - {family-names: Rubin, given-names: Alan F.}
+    - {family-names: Mooney, given-names: Sean D.}
+    - {family-names: Fowler, given-names: Douglas M.}
+    - {family-names: Radivojac, given-names: Predrag}
+    - {family-names: Starita, given-names: Lea M.}

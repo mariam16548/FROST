@@ -1,12 +1,11 @@
-"""Cold-spot membership, MAVE support filtering, and odds ratios."""
+"""Coldspot membership, MAVE support filtering, and odds ratios."""
 import numpy as np
 import pandas as pd
 import pytest
 from scipy.stats import fisher_exact
 
 from coldspots.config import Config, DataPaths, Evaluation
-from coldspots.evaluation import (coldspot_inclusion, evaluate, in_intervals,
-                                  odds_ratio)
+from coldspots.evaluation import evaluate, in_intervals, mave_genes, odds_ratio
 from coldspots.features import complete_genes
 
 
@@ -33,59 +32,54 @@ def test_in_intervals_matches_naive_check():
 
 
 def _mave_case():
-    """One gene with a well-assayed cold spot A and a poorly assayed one B.
+    """Gene G: two coldspots and MAVE calls (released wording).
 
-    A = [1, 100]:   100 positions with one BLB call each   -> passes (>= 10)
-    B = [201, 204]: 4 positions with 50 BLB rows each      -> fails  (< 10)
-    outside:        50 positions (301-350) with one PLP call each
+    A = [1, 100]:   100 positions with one Normal call each
+    B = [201, 204]: 4 positions with 50 Normal calls each
+    outside:        50 positions (301-350) with one Abnormal call each
+    Gene H: one coldspot [1, 50] with only 5 assayed positions inside.
     """
-    # MAVE calls use the released table's wording (Normal = benign).
     rows = ([("G", p, "Normal") for p in range(1, 101)]
             + [("G", p, "Normal") for p in range(201, 205) for _ in range(50)]
-            + [("G", p, "Abnormal") for p in range(301, 351)])
+            + [("G", p, "Abnormal") for p in range(301, 351)]
+            + [("H", p, "Normal") for p in range(1, 6)]
+            + [("H", p, "Abnormal") for p in range(100, 140)])
     mave = pd.DataFrame(rows, columns=["gene_symbol", "aa_pos", "call"])
     mave["clinvar"] = None
-    cold = pd.DataFrame({"gene": ["G", "G"], "aa_start": [1, 201],
-                         "aa_end": [100, 204], "length": [100, 4],
-                         "n_residues_scored": [100, 4]})
+    cold = pd.DataFrame({"gene": ["G", "G", "H"], "aa_start": [1, 201, 1],
+                         "aa_end": [100, 204, 50], "length": [100, 4, 50],
+                         "n_residues_scored": [100, 4, 50]})
     return cold, mave
 
 
-def _cfg(level):
+def _cfg():
     cfg = Config(data=DataPaths("unused"),
-                 evaluation=Evaluation(mave_filter_level=level,
-                                       min_mave_positions=10))
+                 evaluation=Evaluation(enabled=True, min_mave_positions=10))
     cfg.columns.clinvar = "clinvar"
+    cfg.columns.mave = "call"
     return cfg
 
 
-def test_interval_level_mave_excludes_failed_cold_spots():
-    """Variants in a cold spot that fails the filter are not 'outside'."""
-    cold, mave = _mave_case()
-    ev = evaluate(cold, mave.iloc[:0], mave, cfg=_cfg("interval"),
-                  mave_col="call")
-    assert ev["n_mave_intervals"] == 1
-    # B's 200 BLB rows are dropped from both cells, not counted as outside.
-    assert ev["or_mave"]["table"] == [[100, 0], [0, 50]]
+def test_mave_filter_sums_positions_across_a_genes_cold_spots():
+    """G passes (104 positions over two coldspots); H has 5 and is left out.
 
-
-def test_gene_level_mave_keeps_every_cold_spot():
+    Every coldspot of a passing gene counts, including B with only 4
+    assayed positions of its own.
+    """
     cold, mave = _mave_case()
-    ev = evaluate(cold, mave.iloc[:0], mave, cfg=_cfg("gene"),
-                  mave_col="call")
+    ev = evaluate(cold, mave.iloc[:0], mave, cfg=_cfg())
+    assert ev["mave_genes"] == ["G"]
     assert ev["n_mave_intervals"] == 2
+    # Each substitution counts once: 100 + 200 Normal inside, 50 Abnormal out.
     assert ev["or_mave"]["table"] == [[300, 0], [0, 50]]
 
 
-def test_position_unit_collapses_codon_changes():
+def test_mave_genes_threshold():
     cold, mave = _mave_case()
-    s = coldspot_inclusion(source_df=mave, coldspot_df=cold,
-                           gene_col="gene_symbol", aa_col="aa_pos",
-                           label_col="call", label_map={"BLB": "Normal",
-                                                        "PLP": "Abnormal"},
-                           unit="position")
-    assert s["BLB"] == {"inside": 104, "total": 104, "rate": 1.0}
-    assert s["PLP"]["inside"] == 0 and s["PLP"]["total"] == 50
+    kw = dict(label_col="call", gene_col="gene_symbol", pos_col="aa_pos",
+              valid_labels=("Abnormal", "Normal"))
+    assert mave_genes(cold, mave, min_count=5, **kw) == {"G", "H"}
+    assert mave_genes(cold, mave, min_count=6, **kw) == {"G"}
 
 
 def test_odds_ratio_values_and_direction():
@@ -94,7 +88,7 @@ def test_odds_ratio_values_and_direction():
     o = odds_ratio(summary)
     assert o["table"] == [[10, 5], [2, 8]]
     # Haldane-Anscombe corrected point estimate: (10.5 * 8.5) / (5.5 * 2.5)
-    assert o["OR"] == pytest.approx(round(10.5 * 8.5 / (5.5 * 2.5), 2))
+    assert o["OR"] == pytest.approx(10.5 * 8.5 / (5.5 * 2.5))
     assert o["OR"] > 1  # benign enriched inside = pathogenic depletion
     assert o["p"] == pytest.approx(fisher_exact([[10, 5], [2, 8]])[1])
     assert o["OR_lo"] < o["OR"] < o["OR_hi"]

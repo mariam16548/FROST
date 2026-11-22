@@ -61,6 +61,13 @@ def test_training_interval_outside_gene_raises():
                         training_intervals={"T": [(500, 600)]}, **KW)
 
 
+def test_absent_training_gene_raises():
+    df = _training_gene()
+    with pytest.raises(ValueError, match="has no"):
+        train_params_mv(df, ["f1", "f2"],
+                        training_intervals={"ABSENT": [(1, 10)]}, **KW)
+
+
 def test_marginalisation_is_exact():
     df = _training_gene()
     p = train_params_mv(df, ["f1", "f2"],

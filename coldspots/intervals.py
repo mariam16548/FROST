@@ -1,4 +1,4 @@
-"""Viterbi decoding and cold-spot interval extraction."""
+"""Viterbi decoding and coldspot calling."""
 from __future__ import annotations
 
 import numpy as np
@@ -15,53 +15,42 @@ __all__ = [
 COLDSPOT_COLUMNS = ["gene", "aa_start", "aa_end", "length", "n_residues_scored"]
 
 
+def _runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Start and end indices (inclusive) of each run of True in ``mask``."""
+    m = np.concatenate(([False], np.asarray(mask, dtype=bool), [False]))
+    edges = np.flatnonzero(m[1:] != m[:-1])
+    return edges[0::2], edges[1::2] - 1
+
+
 def filter_short_regions(cold_mask: np.ndarray, positions: np.ndarray,
                          min_length: int = 40) -> np.ndarray:
-    """Drop cold runs spanning fewer than ``min_length`` amino-acid positions.
+    """Drop Cold runs spanning fewer than ``min_length`` positions.
 
-    Length is measured in aa coordinates (``end - start + 1``), not in scored
-    residues. Residues with missing scores are absent from ``positions``, so a
-    run can span 40 aa while containing fewer than 40 observations. The count
-    of observations is reported separately as ``n_residues_scored``.
+    The span is ``end - start + 1`` in amino-acid positions, so it includes
+    any positions missing from the table.
     """
-    filtered = cold_mask.copy()
-    in_cold, start = False, 0
-    for i in range(len(cold_mask)):
-        if cold_mask[i] and not in_cold:
-            start, in_cold = i, True
-        elif not cold_mask[i] and in_cold:
-            if positions[i - 1] - positions[start] + 1 < min_length:
-                filtered[start:i] = False
-            in_cold = False
-    if in_cold and positions[-1] - positions[start] + 1 < min_length:
-        filtered[start:] = False
+    positions = np.asarray(positions)
+    filtered = np.zeros(len(cold_mask), dtype=bool)
+    for a, b in zip(*_runs(cold_mask)):
+        if positions[b] - positions[a] + 1 >= min_length:
+            filtered[a:b + 1] = True
     return filtered
 
 
 def extract_intervals(cold_mask: np.ndarray, pos: np.ndarray,
                       gene: str) -> list[dict]:
     """Convert a boolean per-residue mask into closed [aa_start, aa_end] runs."""
-    intervals: list[dict] = []
-    in_cold, start_pos, start_i = False, 0, 0
-
-    def _close(end_i: int) -> dict:
-        return {
+    pos = np.asarray(pos)
+    return [
+        {
             "gene": gene,
-            "aa_start": int(start_pos),
-            "aa_end": int(pos[end_i]),
-            "length": int(pos[end_i]) - int(start_pos) + 1,
-            "n_residues_scored": int(end_i - start_i + 1),
+            "aa_start": int(pos[a]),
+            "aa_end": int(pos[b]),
+            "length": int(pos[b]) - int(pos[a]) + 1,
+            "n_residues_scored": int(b - a + 1),
         }
-
-    for i in range(len(cold_mask)):
-        if cold_mask[i] and not in_cold:
-            start_pos, start_i, in_cold = pos[i], i, True
-        elif not cold_mask[i] and in_cold:
-            intervals.append(_close(i - 1))
-            in_cold = False
-    if in_cold:
-        intervals.append(_close(len(cold_mask) - 1))
-    return intervals
+        for a, b in zip(*_runs(cold_mask))
+    ]
 
 
 def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
@@ -70,8 +59,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
                  verbose: bool = True) -> pd.DataFrame:
     """Run Viterbi decoding for every gene in ``gene_set``.
 
-    Genes with fewer than ``2 * min_cold_run`` scored residues are skipped: a
-    protein that short cannot support a cold/hot contrast at this resolution.
+    Genes with fewer than ``2 * min_cold_run`` scored residues are skipped.
     """
     score_cols = params.features
     cold_state = params.cold_state
@@ -82,7 +70,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
     # Row indices per gene, computed once. Selecting each gene with a boolean
     # mask over the whole table is O(genes x rows) and dominated run time at
     # proteome scale.
-    rows_by_gene = df.groupby(gene_col, sort=False).indices
+    rows_by_gene = df.groupby(gene_col, sort=False, observed=True).indices
     empty = np.array([], dtype=int)
     for gene in sorted(gene_set):
         gdf = df.iloc[rows_by_gene.get(gene, empty)].dropna(subset=score_cols)

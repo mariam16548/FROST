@@ -4,40 +4,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["resolve_column", "prep_scores", "complete_genes"]
-
-
-def resolve_column(df: pd.DataFrame, preferred: str,
-                   candidates: list[str], what: str) -> str:
-    """Return ``preferred`` if present, else the first candidate that is.
-
-    Column names for MAVE calls are not standardised across upstream releases,
-    so the pipeline resolves the name at load time and records the resolved
-    name in the run manifest.
-    """
-    if preferred in df.columns:
-        return preferred
-    for c in candidates:
-        if c in df.columns:
-            print(f"  NOTE: {what} column {preferred!r} not found; "
-                  f"using {c!r}")
-            return c
-    raise KeyError(
-        f"No {what} column found. Tried {[preferred] + list(candidates)}. "
-        f"Available columns: {sorted(df.columns.tolist())}"
-    )
+__all__ = ["prep_scores", "complete_genes"]
 
 
 def prep_scores(scores: np.ndarray, name: str, *,
                 invert: list[str], winsorize: tuple[float, float]) -> np.ndarray:
-    """Orient, winsorise and min-max scale a single feature vector.
+    """Orient, clip and min-max scale one feature within a single gene.
 
-    IMPORTANT (methods): normalisation is computed **within the vector it is
-    given**. During training that vector is the training gene's residues;
-    during detection it is the target gene's residues. Emission means are
-    therefore in each gene's own normalised units, not a global scale. This is
-    a deliberate property of the method and must be preserved to reproduce the
-    published numbers - do not "fix" it by fitting the scaler globally.
+    ``invert`` features are sign-flipped so that higher = more deleterious;
+    values are clipped to the ``winsorize`` percentiles and scaled to [0, 1].
+    Scaling uses only the values given, i.e. one gene at a time.
     """
     scores = np.asarray(scores, dtype=float)
     if name in invert:
@@ -50,5 +26,6 @@ def prep_scores(scores: np.ndarray, name: str, *,
 
 def complete_genes(df: pd.DataFrame, cols: list[str], gene_col: str) -> set[str]:
     """Genes with no missing values in every column of ``cols``."""
-    complete = df[cols].notna().all(axis=1).groupby(df[gene_col]).all()
+    complete = (df[cols].notna().all(axis=1)
+                .groupby(df[gene_col], observed=True).all())
     return set(complete[complete].index)
