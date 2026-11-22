@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import gzip
 import json
-import pickle
 import platform
 import subprocess
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ from pandas.api.types import union_categoricals
 
 from .config import Config
 from .evaluation import evaluate, in_intervals
-from .features import complete_genes, resolve_column
+from .features import complete_genes
 from .intervals import COLDSPOT_COLUMNS, decode_genes
 from .model import marginalize_params, train_params_mv
 
@@ -33,8 +32,7 @@ class LoadedData:
     # The rest are None unless evaluation.enabled:
     clinvar_eval: pd.DataFrame | None = None  # rows for ClinVar evaluation
     mave_eval: pd.DataFrame | None = None     # rows with a MAVE call
-    mave_col: str | None = None               # resolved MAVE label column
-    clinvar_genes: set[str] | None = None     # genes passing the ClinVar filter
+    mave_col: str | None = None               # MAVE label column
 
 
 _PROTEIN_VARIANT = r"^[A-Za-z*]{1,3}(\d+)"   # "C2R" / "Cys2Arg" -> 2
@@ -60,9 +58,7 @@ def read_variant_table(cfg: Config) -> tuple[pd.DataFrame, str | None]:
     path = cfg.data.variant_csv
     header = pd.read_csv(path, nrows=0).columns
     evaluate_on = cfg.evaluation.enabled
-    mave_col = (resolve_column(pd.DataFrame(columns=header), cols.mave,
-                               cols.mave_candidates, "MAVE label")
-                if evaluate_on else None)
+    mave_col = cols.mave if evaluate_on else None
     has_pos = cols.aa_pos in header
     pos_source = cols.aa_pos if has_pos else cols.protein_variant
     label_cols = [cols.clinvar, mave_col] if evaluate_on else []
@@ -159,24 +155,14 @@ def load_data(cfg: Config) -> LoadedData:
     # Training genes are never evaluated.
     evaluable = df[~df[cols.gene].isin(cfg.exclude_genes)]
 
-    # MAVE evaluation set: rows carrying a functional call. Not subject to the
-    # ClinVar count filter - the two evaluations gate genes independently.
+    # Evaluation sets: every row with a ClinVar call / a MAVE call. The
+    # restriction to genes with a cold spot (and, for MAVE, enough calls inside
+    # them) is applied in evaluate().
+    clinvar_eval = evaluable[evaluable[cols.clinvar].notna()]
     mave_eval = evaluable[evaluable[mave_col].notna()]
 
-    # ClinVar evaluation set: genes with enough PLP and BLB rows. reindex so a
-    # table with no PLP (or no BLB) rows at all still yields a column of zeros.
-    plp, blb = ev.clinvar_labels["PLP"], ev.clinvar_labels["BLB"]
-    counts = (evaluable.groupby(cols.gene)[cols.clinvar]
-              .value_counts().unstack(fill_value=0)
-              .reindex(columns=[plp, blb], fill_value=0))
-    min_n = ev.min_class_count
-    clinvar_genes = set(counts[(counts[plp] >= min_n) &
-                               (counts[blb] >= min_n)].index)
-    clinvar_eval = evaluable[evaluable[cols.gene].isin(clinvar_genes)]
-
     _report_eval_inputs(cfg, clinvar_eval, mave_eval, mave_col)
-    return LoadedData(residues, transcripts, clinvar_eval, mave_eval,
-                      mave_col, clinvar_genes)
+    return LoadedData(residues, transcripts, clinvar_eval, mave_eval, mave_col)
 
 
 def _report_inputs(cfg, residues) -> None:
@@ -200,28 +186,13 @@ def _report_eval_inputs(cfg, clinvar_eval, mave_eval, mave_col) -> None:
                 .isin(list(ev.clinvar_labels.values())).sum())
     n_pb = int(mave_eval[mave_col]
                .isin([ev.mave_labels["PLP"], ev.mave_labels["BLB"]]).sum())
-    filt = ("no gene filter" if ev.min_class_count == 0
-            else f">={ev.min_class_count} PLP & BLB")
-    print(f"  ClinVar eval : {clinvar_eval[cols.gene].nunique()} genes "
-          f"({'/'.join(sorted(cfg.exclude_genes))} excluded, "
-          f"{filt})")
-    print(f"                 {len(clinvar_eval):,} variant rows, {n_lab:,} with "
-          f"a {cols.clinvar} call, "
-          f"{clinvar_eval[[cols.gene, cols.aa_pos]].drop_duplicates().shape[0]:,}"
-          f" distinct residues")
+    print(f"  ClinVar eval : {clinvar_eval[cols.gene].nunique()} genes with a "
+          f"{cols.clinvar} call ({'/'.join(sorted(cfg.exclude_genes))} "
+          f"excluded), {n_lab:,} labelled substitutions")
     print(f"  MAVE eval    : {mave_eval[cols.gene].nunique()} genes "
           f"(same table, {mave_col!r} column)")
-    print(f"                 {len(mave_eval):,} rows with a MAVE call, "
-          f"{n_pb:,} PLP/BLB, "
-          f"{mave_eval[[cols.gene, cols.aa_pos]].drop_duplicates().shape[0]:,}"
-          f" distinct residues")
-    print(f"  Counting unit: {ev.unit}"
-          + ("  (primary analysis)" if ev.unit == "variant"
-             else "  (pseudo-replication sensitivity analysis)"))
-    cov = (f", >={ev.min_mave_coverage:.0%} of the interval assayed"
-           if ev.min_mave_coverage > 0 else "")
-    print(f"  MAVE filter  : >={ev.min_mave_positions} distinct PLP/BLB aa "
-          f"positions per {ev.mave_filter_level}{cov}")
+    print(f"                 {len(mave_eval):,} substitutions with a MAVE call, "
+          f"{n_pb:,} abnormal/normal")
 
 
 # ----------------------------------------------------------------------------
@@ -308,8 +279,7 @@ def detect(cfg: Config, residues: pd.DataFrame) -> tuple[pd.DataFrame, list]:
 # ----------------------------------------------------------------------------
 # Reporting
 # ----------------------------------------------------------------------------
-def report(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
-           clinvar_genes: set[str] | None, mave_col: str | None) -> None:
+def report(cfg: Config, ev: dict | None) -> None:
     if not cfg.evaluation.enabled:
         return
     if ev is None:
@@ -318,32 +288,23 @@ def report(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
     e = cfg.evaluation
     print(f"\n{'=' * 78}")
     print("  RESULTS")
-    print(f"  Counting unit : {ev['unit']}")
-    print(f"  ClinVar eval  : input table"
-          + (f", genes with >={e.min_class_count} PLP & BLB"
-             if e.min_class_count else ", all genes"))
-    print(f"  MAVE eval     : same table ({mave_col!r}), "
-          f">={e.min_mave_positions} distinct PLP/BLB aa positions "
-          f"per {e.mave_filter_level}")
+    print(f"  ClinVar: genes with >=1 cold spot")
+    print(f"  MAVE   : genes with >={e.min_mave_positions} distinct positions "
+          f"with an abnormal/normal call inside their cold spots")
     print(f"{'=' * 78}")
-
-    n_cv = len(set(coldspots["gene"].unique()) & clinvar_genes)
-    print(f"  Cold spots          : {ev['n_intervals']} intervals, "
+    print(f"  Cold spots       : {ev['n_intervals']} intervals, "
           f"{ev['n_genes']} genes, {ev['total_aas']:,} AAs")
-    print(f"  Cold spots (ClinVar): {n_cv} eval-set genes")
-    if ev["total_mave_aas"]:
-        print(f"  Cold spots (MAVE)   : {ev['n_mave_intervals']} intervals, "
-              f"{ev['n_mave_genes']} genes, {ev['total_mave_aas']:,} AAs "
-              f"({ev['assayed_mave_aas']:,} assayed, "
-              f"{ev['assayed_mave_aas'] / ev['total_mave_aas']:.0%})")
+    if ev["n_mave_genes"]:
+        print(f"  Cold spots (MAVE): {ev['n_mave_intervals']} intervals in "
+              f"{ev['n_mave_genes']} genes ({', '.join(ev['mave_genes'])})")
     else:
-        print("  Cold spots (MAVE)   : none pass the support filter")
+        print("  Cold spots (MAVE): no gene passes the MAVE filter")
 
     for name, summary, order in (
         ("ClinVar", ev["clinvar_summary"], ("BLB", "PLP", "VUS")),
         ("MAVE", ev["mave_summary"], ("BLB", "PLP", "IR")),
     ):
-        print(f"\n  {name} ({ev['unit']}-level counts inside / total):")
+        print(f"\n  {name} (substitutions inside / total):")
         for lbl in order:
             if lbl not in summary:
                 continue
@@ -492,16 +453,10 @@ def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
         f, sep="\t", index=False)
     written["regions"] = f
 
-    if cfg.output.variant_table:
-        f = out_dir / f"{p}_variants.csv.gz"
-        print(f"\nWriting per-variant membership to {f} ...")
-        write_variant_table(f, cfg, coldspots)
-        written["variants"] = f
-
-    if ev is not None and not ev["coldspot_df_mave"].empty:
-        f = out_dir / f"{p}_regions_mave_filtered.csv"
-        ev["coldspot_df_mave"].to_csv(f, index=False)
-        written["regions_mave"] = f
+    f = out_dir / f"{p}_variants.csv.gz"
+    print(f"\nWriting per-variant membership to {f} ...")
+    write_variant_table(f, cfg, coldspots)
+    written["variants"] = f
 
     if ev is not None:
         f = out_dir / f"{p}_metrics.json"
@@ -513,7 +468,6 @@ def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
         "git_commit": _git_commit(),
         "config_fingerprint": cfg.fingerprint(),
         "config": _jsonable(cfg.to_dict()),
-        "resolved_mave_column": data.mave_col,
         "package_versions": _versions(),
         "trained_models": [params.summary() for _, params in runs],
         "n_regions": int(len(coldspots)),
@@ -522,13 +476,6 @@ def write_outputs(cfg: Config, coldspots: pd.DataFrame, ev: dict | None,
     f = out_dir / f"{p}_manifest.json"
     f.write_text(json.dumps(manifest, indent=2, default=str))
     written["manifest"] = f
-
-    if cfg.output.write_pickle:
-        f = out_dir / f"{p}.pkl"
-        with open(f, "wb") as fh:
-            pickle.dump({"coldspot_df": coldspots, "eval": ev,
-                         "manifest": manifest}, fh)
-        written["pickle"] = f
 
     print("\nWrote:")
     for k, v in written.items():
@@ -546,6 +493,6 @@ def run(cfg: Config) -> dict:
     if cfg.evaluation.enabled:
         ev = evaluate(coldspots, data.clinvar_eval, data.mave_eval,
                       cfg=cfg, mave_col=data.mave_col)
-    report(cfg, coldspots, ev, data.clinvar_genes, data.mave_col)
+    report(cfg, ev)
     written = write_outputs(cfg, coldspots, ev, runs, data)
     return {"coldspots": coldspots, "eval": ev, "written": written}

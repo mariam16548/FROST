@@ -1,16 +1,17 @@
-"""Cold-spot evaluation: membership, enrichment, odds ratios.
+"""Optional evaluation: ClinVar and MAVE odds ratios for the cold spots.
 
-Two independent evaluations run against the same variant-level input
-table:
+Implements the manuscript's benchmarking metrics. Each row of the input table
+is one amino-acid substitution, and is one observation.
 
-* **ClinVar** - uses the clinical significance column, over the full cold-spot
-  set.
-* **MAVE**    - uses the functional-assay call column, restricted to cold spots
-  with enough assayed positions to support a claim.
+* **ClinVar** - BLB vs PLP inside vs outside cold spots, over genes with at
+  least one predicted cold spot.
+* **MAVE**    - functionally normal vs abnormal calls inside vs outside cold
+  spots, over genes whose MAVE calls cover at least ``min_mave_positions``
+  distinct positions with a non-indeterminate call inside their cold spots,
+  summed across all cold spots in the gene.
 
 Cold-spot membership is always recomputed from the intervals produced by the
-current run. Any ``in_coldspot``-style column shipped with the input table is
-dropped on load and never consulted.
+current run.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from scipy.stats import fisher_exact
 
 __all__ = [
     "odds_ratio", "in_intervals", "coldspot_inclusion",
-    "filter_by_mave_support", "evaluate",
+    "mave_genes", "evaluate",
 ]
 
 NA = float("nan")
@@ -40,10 +41,10 @@ def odds_ratio(summary: dict) -> dict:
     depleted of pathogenic variation. Report the direction explicitly; the
     reciprocal convention is equally common in the literature.
 
-    The point estimate and Wald CI use the Haldane-Anscombe correction (+0.5 to
-    every cell) so they remain finite when a cell is empty. Fisher's exact
-    p-value is computed on the *uncorrected* counts, which is the conventional
-    pairing but means p and the CI are not derived from an identical table.
+    The point estimate and the 95% Woolf (log-scale) confidence interval use
+    the Haldane-Anscombe correction (+0.5 to every cell) so they remain finite
+    when a cell is empty. The p-value is a two-sided Fisher's exact test on
+    the uncorrected counts.
     """
     blb_in = summary["BLB"]["inside"]
     blb_out = summary["BLB"]["total"] - blb_in
@@ -65,18 +66,6 @@ def odds_ratio(summary: dict) -> dict:
         "p": float(p),
         "table": [[blb_in, blb_out], [plp_in, plp_out]],
     }
-
-
-def _collapse_to_positions(df: pd.DataFrame, gene_col: str, aa_col: str,
-                           label_col: str) -> pd.DataFrame:
-    """One row per (gene, aa_pos, label) - the pseudo-replication control.
-
-    The input table holds one row per substitution, so a residue with several
-    classified substitutions contributes several rows and Fisher's exact test
-    treats them as independent. Collapsing removes that inflation. A position
-    with both a PLP and a BLB call is retained once per label.
-    """
-    return df.drop_duplicates(subset=[gene_col, aa_col, label_col])
 
 
 def in_intervals(df: pd.DataFrame, intervals_df: pd.DataFrame, *,
@@ -110,27 +99,14 @@ def in_intervals(df: pd.DataFrame, intervals_df: pd.DataFrame, *,
 
 def coldspot_inclusion(*, source_df: pd.DataFrame, coldspot_df: pd.DataFrame,
                        gene_col: str, aa_col: str, label_col: str,
-                       label_map: dict[str, str],
-                       unit: str = "variant",
-                       exclude_df: pd.DataFrame | None = None) -> dict:
-    """Count labelled observations inside vs. outside the predicted cold spots.
+                       label_map: dict[str, str]) -> dict:
+    """Count labelled substitutions inside vs. outside the predicted cold spots.
 
     Only genes carrying at least one cold spot contribute; a gene with no
     predicted cold spot has no inside/outside contrast to offer.
-
-    ``exclude_df`` lists intervals whose positions are removed from **both**
-    cells before counting. It is used by the interval-level MAVE evaluation:
-    a cold spot that fails the assay-support filter is neither "inside" (it was
-    not retained) nor "outside" (it is still a predicted cold spot), so its
-    variants must not be counted at all.
     """
     coldspot_genes = set(coldspot_df["gene"].unique())
     src = source_df[source_df[gene_col].isin(coldspot_genes)]
-    if exclude_df is not None and not exclude_df.empty:
-        drop = in_intervals(src, exclude_df, gene_col=gene_col, aa_col=aa_col)
-        src = src[~drop]
-    if unit == "position":
-        src = _collapse_to_positions(src, gene_col, aa_col, label_col)
     src = src.assign(_in_coldspot=in_intervals(
         src, coldspot_df, gene_col=gene_col, aa_col=aa_col))
 
@@ -146,99 +122,25 @@ def coldspot_inclusion(*, source_df: pd.DataFrame, coldspot_df: pd.DataFrame,
     return summary
 
 
-def filter_by_mave_support(coldspot_df: pd.DataFrame, mave_df: pd.DataFrame, *,
-                           min_count: int, min_coverage: float, level: str,
-                           label_col: str, gene_col: str, pos_col: str,
-                           valid_labels: tuple[str, ...] = ("PLP", "BLB"),
-                           ) -> pd.DataFrame:
-    """Keep cold spots with enough functional-assay evidence to interpret.
+def mave_genes(coldspot_df: pd.DataFrame, mave_df: pd.DataFrame, *,
+               min_count: int, label_col: str, gene_col: str, pos_col: str,
+               valid_labels: tuple[str, str]) -> set[str]:
+    """Genes with enough MAVE evidence inside their cold spots.
 
-    "Enough" means at least ``min_count`` **distinct aa positions** carrying a
-    call in ``valid_labels`` (the raw labels for PLP and BLB, in that order),
-    and optionally at least ``min_coverage`` of the region assayed at all.
-    Positions are deduplicated before counting because the input table has
-    one row per substitution.
-
-    ``level="interval"``
-        every cold spot must clear the threshold on its own.
-    ``level="gene"``
-        the threshold applies to the **sum over a gene's cold spots**, and all
-        cold spots in a passing gene are retained - including ones with one,
-        two, or zero assayed positions. Cold spots within a gene are disjoint,
-        so summing distinct-position counts equals counting their union. This
-        is the looser of the two settings; report which was used.
-
-    Columns added per region:
-        ``n_PLP`` / ``n_BLB``  distinct aa positions with that call
-        ``n_positions``        distinct aa positions with any valid call
-        ``n_assayed``          distinct aa positions with any call, incl. IR
-        ``frac_assayed``       ``n_assayed / length``
-    plus, when ``level="gene"``, the gene-level totals actually thresholded:
-        ``gene_n_positions``, ``gene_n_assayed``, ``gene_frac_assayed``
-
-    ``frac_assayed`` matters: a region can clear ``min_count`` on a handful of
-    clustered residues at one edge, so quote it alongside any depletion claim.
+    A gene qualifies if its MAVE calls in ``valid_labels`` (abnormal or normal,
+    i.e. non-zero ExCALIBR points) cover at least ``min_count`` distinct
+    amino-acid positions inside its predicted cold spots, summed across all
+    of its cold spots.
     """
-    if level not in ("interval", "gene"):
-        raise ValueError(f"level must be 'interval' or 'gene', got {level!r}")
-    if coldspot_df.empty:
-        return coldspot_df.copy()
-
-    # One row per (gene, aa_pos, label) with a call we score on.
-    valid = (mave_df[mave_df[label_col].isin(valid_labels)]
-             [[gene_col, pos_col, label_col]]
-             .drop_duplicates())
-
-    c = coldspot_df.reset_index().rename(columns={"index": "_orig_idx"})
-    merged = c.merge(valid, left_on="gene", right_on=gene_col, how="left")
-    hits = merged[(merged[pos_col] >= merged["aa_start"]) &
-                  (merged[pos_col] <= merged["aa_end"])]
-
-    counts = (
-        hits.groupby(["_orig_idx", label_col])[pos_col].nunique()
-            .unstack(fill_value=0)
-            .reindex(columns=list(valid_labels), fill_value=0)
-    )
-    canon = {raw: name for name, raw in zip(("PLP", "BLB"), valid_labels)}
-    counts.columns = [f"n_{canon.get(lbl, lbl)}" for lbl in counts.columns]
-    counts["n_positions"] = hits.groupby("_orig_idx")[pos_col].nunique()
-
-    # Assay coverage: any MAVE call at all, whatever the label.
-    any_call = mave_df[[gene_col, pos_col]].drop_duplicates()
-    m_any = c.merge(any_call, left_on="gene", right_on=gene_col, how="left")
-    in_any = ((m_any[pos_col] >= m_any["aa_start"]) &
-              (m_any[pos_col] <= m_any["aa_end"]))
-    counts["n_assayed"] = m_any[in_any].groupby("_orig_idx")[pos_col].nunique()
-
-    count_cols = counts.columns.tolist()
-    out = coldspot_df.join(counts, how="left").fillna(
-        {col: 0 for col in count_cols}
-    )
-    for col in count_cols:
-        out[col] = out[col].astype(int)
-    out["frac_assayed"] = out["n_assayed"] / out["length"]
-
-    if level == "gene":
-        g = out.groupby("gene")
-        out["gene_n_positions"] = g["n_positions"].transform("sum")
-        out["gene_n_assayed"] = g["n_assayed"].transform("sum")
-        out["gene_frac_assayed"] = (out["gene_n_assayed"] /
-                                    g["length"].transform("sum"))
-        keep = ((out["gene_n_positions"] >= min_count) &
-                (out["gene_frac_assayed"] >= min_coverage))
-    else:
-        keep = ((out["n_positions"] >= min_count) &
-                (out["frac_assayed"] >= min_coverage))
-    return out[keep].copy()
+    calls = (mave_df[mave_df[label_col].isin(valid_labels)]
+             [[gene_col, pos_col]].drop_duplicates())
+    inside = in_intervals(calls, coldspot_df, gene_col=gene_col, aa_col=pos_col)
+    counts = calls[inside].groupby(gene_col, observed=True).size()
+    return set(counts[counts >= min_count].index.astype(str))
 
 
 def _rate_ratio(summary: dict) -> float:
-    """rate(PLP inside) / rate(BLB inside).
-
-    Reported as ``LR-`` in the original script. Read it as the likelihood ratio
-    for cold-spot membership given a pathogenic vs. a benign variant: values
-    below 1 mean membership argues against pathogenicity.
-    """
+    """LR-: rate(PLP inside) / rate(BLB inside)."""
     blb = summary["BLB"]["rate"]
     if not (isinstance(blb, float) and blb > 0) or np.isnan(blb):
         return NA
@@ -257,35 +159,28 @@ def evaluate(coldspot_df: pd.DataFrame, clinvar_df: pd.DataFrame,
     cv = coldspot_inclusion(
         source_df=clinvar_df, coldspot_df=coldspot_df,
         gene_col=gene_col, aa_col=pos_col, label_col=cols.clinvar,
-        label_map=ev.clinvar_labels, unit=ev.unit,
+        label_map=ev.clinvar_labels,
     )
 
-    cs_mave = filter_by_mave_support(
-        coldspot_df, mave_df,
-        min_count=ev.min_mave_positions, min_coverage=ev.min_mave_coverage,
-        level=ev.mave_filter_level, label_col=mave_col,
-        gene_col=gene_col, pos_col=pos_col,
+    genes = mave_genes(
+        coldspot_df, mave_df, min_count=ev.min_mave_positions,
+        label_col=mave_col, gene_col=gene_col, pos_col=pos_col,
         valid_labels=(ev.mave_labels["PLP"], ev.mave_labels["BLB"]),
     )
+    cs_mave = coldspot_df[coldspot_df["gene"].astype(str).isin(genes)]
     if cs_mave.empty:
         mv = {lbl: {"inside": 0, "total": 0, "rate": NA}
               for lbl in ev.mave_labels}
         or_mv = {"OR": NA, "OR_lo": NA, "OR_hi": NA, "p": NA, "table": None}
     else:
-        # Cold spots that failed the support filter in a gene that still has
-        # a passing one (only possible with level="interval"): drop their
-        # variants from both cells rather than counting them as "outside".
-        failed = coldspot_df.loc[~coldspot_df.index.isin(cs_mave.index)]
-        failed = failed[failed["gene"].isin(set(cs_mave["gene"]))]
         mv = coldspot_inclusion(
             source_df=mave_df, coldspot_df=cs_mave,
             gene_col=gene_col, aa_col=pos_col, label_col=mave_col,
-            label_map=ev.mave_labels, unit=ev.unit, exclude_df=failed,
+            label_map=ev.mave_labels,
         )
         or_mv = odds_ratio(mv)
 
     return {
-        "unit": ev.unit,
         "or_clinvar": odds_ratio(cv),
         "or_mave": or_mv,
         "lr_clinvar": _rate_ratio(cv),
@@ -293,12 +188,11 @@ def evaluate(coldspot_df: pd.DataFrame, clinvar_df: pd.DataFrame,
         "n_intervals": int(len(coldspot_df)),
         "n_mave_intervals": int(len(cs_mave)),
         "n_genes": int(coldspot_df["gene"].nunique()),
-        "n_mave_genes": int(cs_mave["gene"].nunique()) if not cs_mave.empty else 0,
+        "n_mave_genes": len(genes),
+        "mave_genes": sorted(genes),
         "total_aas": int(coldspot_df["length"].sum()),
-        "total_mave_aas": int(cs_mave["length"].sum()) if not cs_mave.empty else 0,
-        "assayed_mave_aas": int(cs_mave["n_assayed"].sum()) if not cs_mave.empty else 0,
+        "total_mave_aas": int(cs_mave["length"].sum()),
         "vus_count": cv.get("VUS", {}).get("inside", 0),
         "clinvar_summary": cv,
         "mave_summary": mv,
-        "coldspot_df_mave": cs_mave,
     }

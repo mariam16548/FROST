@@ -28,18 +28,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--evaluate", dest="evaluation.enabled",
                    action="store_const", const=True,
                    help="also run the ClinVar / MAVE enrichment analysis")
-    p.add_argument("--unit", dest="evaluation.unit",
-                   choices=["variant", "position"],
-                   help="counting unit for the enrichment tests")
-    p.add_argument("--mave-filter-level", dest="evaluation.mave_filter_level",
-                   choices=["gene", "interval"],
-                   help="apply the MAVE support threshold per gene or per interval")
-    p.add_argument("--min-mave-positions", dest="evaluation.min_mave_positions",
-                   type=int, help="minimum distinct PLP/BLB MAVE positions")
-    p.add_argument("--min-mave-coverage", dest="evaluation.min_mave_coverage",
-                   type=float, help="minimum assayed fraction of a cold spot")
-    p.add_argument("--min-cold-run", dest="detection.min_cold_run", type=int,
-                   help="minimum cold-run span in amino acids")
     return p
 
 

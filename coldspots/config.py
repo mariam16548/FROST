@@ -32,14 +32,6 @@ class DataPaths:
 class Columns:
     clinvar: str = "CLNSIG"
     mave: str = "functional_assignment"
-    # Tried in order if `mave` is absent; the resolved name is recorded in the
-    # run manifest.
-    mave_candidates: list[str] = field(
-        default_factory=lambda: [
-            "functional_assignment", "ExC_assignment", "assignment",
-            "mave_assignment", "MAVE_assignment", "mave_class", "MAVE_class",
-        ]
-    )
     gene: str = "gene_symbol"
     # Copied into the regions table if present (one transcript per gene).
     transcript: str = "transcript_id"
@@ -51,10 +43,7 @@ class Columns:
     # never read, so cold-spot membership is always recomputed from the
     # intervals produced by the current run.
     drop_precomputed: list[str] = field(
-        default_factory=lambda: [
-            "variant_in_coldspot", "gene_has_coldspot",
-            "in_coldspot", "in_coldspot_bw",
-        ]
+        default_factory=lambda: ["variant_in_coldspot", "gene_has_coldspot"]
     )
 
 
@@ -100,22 +89,10 @@ class Evaluation:
     # pipeline's job is the cold-spot regions and the per-variant membership
     # column. When off, the clinvar and MAVE columns are not needed at all.
     enabled: bool = False
-    # ClinVar gene filter: keep genes with >= this many PLP and BLB rows.
-    # 0 disables the filter.
-    min_class_count: int = 0
-    # MAVE cold-spot filter: distinct aa positions carrying a PLP/BLB call.
+    # A gene enters the MAVE evaluation if its abnormal/normal MAVE calls
+    # cover at least this many distinct positions inside its cold spots,
+    # summed across all of its cold spots.
     min_mave_positions: int = 10
-    # Minimum fraction of a region with any MAVE call. 0 disables.
-    min_mave_coverage: float = 0.0
-    # "gene": threshold the sum over a gene's cold spots and keep them all if
-    #         the gene clears it.
-    # "interval": each cold spot must clear the threshold on its own.
-    mave_filter_level: str = "gene"
-    # "variant":  count one observation per row of the input table.
-    # "position": collapse to one observation per (gene, aa_pos, label).
-    # See docs/METHODS.md - "variant" is the primary analysis, "position" is
-    # the pseudo-replication sensitivity analysis.
-    unit: str = "variant"
     # Canonical name -> label as it appears in the data. PLP and BLB are
     # required; any other entries are reported but not tested.
     clinvar_labels: dict[str, str] = field(
@@ -131,10 +108,6 @@ class Evaluation:
 class Output:
     dir: str = "results"
     prefix: str = "coldspots"
-    # The input table's identifying columns plus gene_has_coldspot and
-    # variant_in_coldspot (gzipped CSV, one row per input row).
-    variant_table: bool = True
-    write_pickle: bool = False
 
 
 @dataclass
@@ -170,16 +143,6 @@ class Config:
 
     def validate(self) -> None:
         e = self.evaluation
-        if e.mave_filter_level not in ("gene", "interval"):
-            raise ValueError(
-                f"evaluation.mave_filter_level must be 'gene' or 'interval', "
-                f"got {e.mave_filter_level!r}"
-            )
-        if e.unit not in ("variant", "position"):
-            raise ValueError(
-                f"evaluation.unit must be 'variant' or 'position', "
-                f"got {e.unit!r}"
-            )
         if not self.features.primary:
             raise ValueError("features.primary must not be empty")
         missing = [f for f in self.features.fallback_drop
@@ -204,11 +167,8 @@ class Config:
                 f"{bad_invert}")
         if len(set(self.features.primary)) != len(self.features.primary):
             raise ValueError("features.primary contains duplicates")
-        if not 0 <= e.min_mave_coverage <= 1:
-            raise ValueError("evaluation.min_mave_coverage must be in [0, 1]")
-        if e.min_mave_positions < 0 or e.min_class_count < 0:
-            raise ValueError("evaluation.min_mave_positions and "
-                             "min_class_count must be >= 0")
+        if e.min_mave_positions < 0:
+            raise ValueError("evaluation.min_mave_positions must be >= 0")
         missing_train = [g for g in self.training.intervals
                          if g not in self.training.exclude_genes]
         if missing_train:
@@ -257,7 +217,7 @@ _SECTIONS = {
 def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> Config:
     """Load a YAML config, apply dotted-key overrides, and validate it.
 
-    ``overrides`` keys use dotted paths, e.g. ``{"evaluation.unit": "position"}``.
+    ``overrides`` keys use dotted paths, e.g. ``{"output.dir": "results/run2"}``.
     """
     path = Path(path)
     with open(path) as fh:

@@ -62,22 +62,14 @@ def test_two_runs_give_identical_files(synth, tmp_path):
         assert a[key].read_bytes() == b[key].read_bytes()
 
 
-def test_sensitivity_settings_run(synth, tmp_path):
-    result = run(_cfg(synth, tmp_path, **{"evaluation.unit": "position",
-                                          "evaluation.mave_filter_level":
-                                              "interval"}))
-    assert result["eval"]["unit"] == "position"
-
-
 def test_table_without_pathogenic_labels(synth, tmp_path):
-    """No PLP rows at all must not crash the ClinVar gene filter."""
+    """No PLP rows at all must not crash the evaluation."""
     df = pd.read_csv(synth["variants"], low_memory=False)
     df.loc[df["CLNSIG"] == "PLP", "CLNSIG"] = np.nan
     path = tmp_path / "no_plp.csv"
     df.to_csv(path, index=False)
-    cfg = _cfg(synth, tmp_path, **{"data.variant_csv": str(path),
-                                   "evaluation.min_class_count": 1})
-    run(cfg)
+    ev = run(_cfg(synth, tmp_path, **{"data.variant_csv": str(path)}))["eval"]
+    assert ev["clinvar_summary"]["PLP"]["total"] == 0
 
 
 def test_misplaced_training_interval_is_an_error(synth, tmp_path):

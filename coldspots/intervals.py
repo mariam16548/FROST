@@ -62,7 +62,7 @@ def decode_genes(gene_set, params: TrainedParams, df: pd.DataFrame, *,
     """Run Viterbi decoding for every gene in ``gene_set``.
 
     Genes with fewer than ``2 * min_cold_run`` scored residues are skipped: a
-    protein that short cannot support a cold/hot contrast at this resolution.
+    protein that short cannot support a Cold/Not-Cold contrast at this resolution.
     """
     score_cols = params.features
     cold_state = params.cold_state

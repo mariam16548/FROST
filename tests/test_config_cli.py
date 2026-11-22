@@ -26,7 +26,7 @@ def _write_cfg(tmp_path, **sections):
 
 
 def test_shipped_configs_load():
-    for name in ("default", "sensitivity_position_level", "synthetic"):
+    for name in ("default", "synthetic"):
         load_config(REPO / "config" / f"{name}.yaml")
 
 
@@ -36,12 +36,10 @@ def test_shipped_configs_load():
     ({"features__primary": ["max_AlphaMissense", "min_ESM1b", "max_EVE",
                             "max_phyloP", "max_phyloP"]},
      "duplicates"),
-    ({"evaluation__min_mave_coverage": 1.5}, "min_mave_coverage"),
     ({"evaluation__min_mave_positions": -1}, ">= 0"),
     ({"training__exclude_genes": []}, "exclude_genes"),
     ({"evaluation__mave_labels": {"PLP": "X", "BLB": "X"}}, "same label"),
     ({"evaluation__mave_labels": {"PLP": "Abnormal"}}, "PLP and BLB"),
-    ({"evaluation__unit": "residue"}, "unit"),
 ])
 def test_bad_settings_are_rejected(tmp_path, override, message):
     with pytest.raises(ValueError, match=message):
@@ -71,3 +69,21 @@ def test_cli_evaluate_flag(tmp_path):
 def test_p_value_display():
     assert _format_p(0.0) == "<1e-300"
     assert _format_p(0.01234) == "0.01234"
+
+
+@pytest.mark.parametrize("key", ["evaluation__mave_filter_level",
+                                 "evaluation__unit", "seed"])
+def test_options_outside_the_manuscript_are_not_accepted(tmp_path, key):
+    raw = yaml.safe_load((REPO / "config" / "default.yaml").read_text())
+    section, _, leaf = key.partition("__")
+    if leaf:
+        raw[section][leaf] = "x"
+    else:
+        raw[section] = 1
+    path = tmp_path / "cfg.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    if key == "seed":
+        load_config(path)          # an old top-level seed: is ignored
+    else:
+        with pytest.raises(TypeError):
+            load_config(path)

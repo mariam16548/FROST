@@ -39,9 +39,7 @@ error if a residue carries different values. A gene with any missing
 are in the released table).
 
 `CLNSIG` and `functional_assignment` are read only when the optional
-evaluation is on (`--evaluate`). Because there is one row per substitution, a
-residue can carry several ClinVar or MAVE calls. This is what makes the counting-unit distinction in
-`evaluation.unit` necessary; see [METHODS.md §7.5](METHODS.md).
+evaluation is on (`--evaluate`).
 
 ## Using a different table
 

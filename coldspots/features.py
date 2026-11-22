@@ -4,28 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-__all__ = ["resolve_column", "prep_scores", "complete_genes"]
-
-
-def resolve_column(df: pd.DataFrame, preferred: str,
-                   candidates: list[str], what: str) -> str:
-    """Return ``preferred`` if present, else the first candidate that is.
-
-    Column names for MAVE calls are not standardised across upstream releases,
-    so the pipeline resolves the name at load time and records the resolved
-    name in the run manifest.
-    """
-    if preferred in df.columns:
-        return preferred
-    for c in candidates:
-        if c in df.columns:
-            print(f"  NOTE: {what} column {preferred!r} not found; "
-                  f"using {c!r}")
-            return c
-    raise KeyError(
-        f"No {what} column found. Tried {[preferred] + list(candidates)}. "
-        f"Available columns: {sorted(df.columns.tolist())}"
-    )
+__all__ = ["prep_scores", "complete_genes"]
 
 
 def prep_scores(scores: np.ndarray, name: str, *,

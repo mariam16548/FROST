@@ -49,18 +49,18 @@ value of the remaining three are not decoded; the run log reports how many.
 
 ## 3. Model and parameter estimation
 
-A two-state Gaussian HMM. State 0 is "cold" (tolerant), state 1 is "hot".
+A two-state Gaussian HMM with states Cold (state 0) and Not-Cold (state 1).
 
 Parameters are estimated **supervised, in closed form**, from labelled
-intervals in the training gene. With BRCA1 residues 224–1366 labelled cold and
-the remainder of the protein labelled hot:
+intervals in the training gene. With BRCA1 residues 224–1366 labelled Cold and
+the remainder of the protein labelled Not-Cold:
 
 * **Emissions.** Per-state, per-feature mean and standard deviation of the
   normalised scores. Features are treated as conditionally independent given
   the state, so the covariance is diagonal (a small constant, 1e-6, is added to
   each standard deviation for numerical stability). `covariance_type="full"` is
   used at decode time, with off-diagonal entries zero.
-* **Initial state.** The empirical proportion of labelled cold and hot residues.
+* **Initial state.** The empirical proportion of labelled Cold and Not-Cold residues.
 * **Transitions.** Adjacent-residue transition counts with add-one (Laplace)
   smoothing, row-normalised.
 
@@ -92,7 +92,7 @@ For each gene outside the training set:
 1. take the gene's residues, sorted by position (genes reaching this step
    have no missing feature values);
 2. skip the gene if fewer than `2 × min_cold_run` (default 80) scored residues
-   remain — a protein that short cannot support a cold/hot contrast at this
+   remain — a protein that short cannot support a Cold/Not-Cold contrast at this
    resolution;
 3. normalise each feature (§2) and Viterbi-decode;
 4. discard cold runs spanning fewer than `min_cold_run` (default 40) amino
@@ -122,101 +122,47 @@ exactly.
 
 ## 7. Evaluation (optional)
 
-Off by default (`evaluation.enabled: false`); enable with `--evaluate`. The
-rest of this section describes what it computes.
+Off by default (`evaluation.enabled: false`); enable with `--evaluate`. This
+computes the manuscript's benchmarking metrics. Each row of the table is one
+amino-acid substitution and is one observation. Cold-spot membership is
+recomputed from this run's intervals and is inclusive of both endpoints.
+Training genes (BRCA1) are excluded.
 
-### 7.1 Membership
+### 7.1 ClinVar
 
-Cold-spot membership is recomputed from the intervals produced by the current
-run. Any `in_coldspot`-style column in the input table is dropped on load and
-never consulted. Membership is inclusive of both interval endpoints.
+Restricted to genes containing at least one predicted cold spot. Substitutions
+are grouped as PLP, BLB and VUS; VUS inside cold spots are counted but not
+tested.
 
-Only genes carrying at least one predicted cold spot contribute to the tests. A
-gene with no predicted cold spot offers no inside/outside contrast and is
-excluded rather than counted as entirely outside.
+### 7.2 MAVE
 
-### 7.2 ClinVar evaluation
+Calls are Abnormal (ExCALIBR points > 0, counted as PLP), Normal (< 0,
+counted as BLB) and Indeterminate (0). Genes without predicted cold spots are
+excluded, as are genes whose Abnormal/Normal calls cover fewer than
+`min_mave_positions` (10) distinct amino-acid positions within their
+predicted cold spots, summed across all cold spots in the gene.
 
-Runs over the full cold-spot set. Variants are grouped as PLP
-(pathogenic/likely pathogenic), BLB (benign/likely benign), and VUS. VUS counts
-inside cold spots are reported but not tested.
-
-`evaluation.min_class_count` optionally restricts to genes with at least that
-many PLP and BLB rows; the published configuration sets it to 0, i.e. no gene
-filter.
-
-### 7.3 MAVE evaluation
-
-Runs over the same table, keyed on the functional-call column, and is
-restricted to cold spots with enough assay support: at least
-`min_mave_positions` (default 10) **distinct amino-acid positions** carrying a
-PLP or BLB functional call. Positions are deduplicated before counting, since
-the table holds one row per substitution.
-
-`mave_filter_level` controls how the threshold is applied:
-
-* `interval` — each cold spot must clear the threshold on its own. Variants
-  in a cold spot that fails are removed from **both** cells of the table
-  below: they are neither inside a retained cold spot nor outside every
-  predicted one;
-* `gene` (published default) — the threshold applies to the **sum** across a
-  gene's cold spots, and every cold spot in a passing gene is retained,
-  including those with few or no assayed positions. Cold spots within a gene
-  are disjoint, so summing distinct-position counts equals counting their
-  union. This is the looser setting and should be stated as such.
-
-Each retained region reports `n_PLP`, `n_BLB`, `n_positions`, `n_assayed`
-(distinct positions with any call, including intermediate/indeterminate), and
-`frac_assayed = n_assayed / length`. `frac_assayed` should be quoted alongside
-any depletion claim: a region can clear the position threshold on a handful of
-clustered residues at one edge while most of it is unassayed.
-
-### 7.4 Statistics
+### 7.3 Statistics
 
 For each evaluation, a 2×2 table is formed:
 
 |                     | inside cold spot | outside |
 | ------------------- | ---------------- | ------- |
-| BLB (benign)        | `blb_in`         | `blb_out` |
-| PLP (pathogenic)    | `plp_in`         | `plp_out` |
+| BLB / Normal        | `blb_in`         | `blb_out` |
+| PLP / Abnormal      | `plp_in`         | `plp_out` |
 
-The odds ratio is `(blb_in · plp_out) / (blb_out · plp_in)`, i.e. **the odds of
-a benign rather than pathogenic call inside a cold spot relative to outside**.
-OR > 1 indicates depletion of pathogenic variation. The point estimate and the
-95% Wald confidence interval on the log scale use the Haldane–Anscombe
-correction (+0.5 to every cell) so they remain finite when a cell is empty. The
-p-value is Fisher's exact test on the **uncorrected** counts; this is the
-conventional pairing, but it does mean the p-value and the interval are not
-derived from an identical table. Raw counts are written to `*_metrics.json` so
-that any other convention can be applied.
-
-Also reported is the rate ratio `rate(PLP inside) / rate(BLB inside)`, labelled
-`LR-` in the original script: the likelihood ratio for cold-spot membership
-given a pathogenic versus a benign variant. Values below 1 mean that membership
-argues against pathogenicity.
-
-### 7.5 Counting unit and pseudo-replication
-
-`evaluation.unit` sets what counts as one observation.
-
-* `variant` (published primary analysis) — one observation per row of the
-  table, i.e. per substitution. A residue with several classified
-  substitutions contributes several observations. Since those observations share a residue and are not
-  independent, Fisher's exact test overstates the effective sample size and
-  p-values are anti-conservative.
-* `position` — the table is collapsed to one observation per (gene, position,
-  label) before testing. A position with both a pathogenic and a benign call is
-  retained once per label.
-
-`config/sensitivity_position_level.yaml` runs the position-level analysis
-together with `mave_filter_level: interval`.
+The odds ratio is `(blb_in · plp_out) / (blb_out · plp_in)`, so OR > 1 means
+benign (normal) substitutions are enriched inside cold spots relative to
+pathogenic (abnormal) ones. A Haldane–Anscombe correction (+0.5) is applied to
+every cell; the 95% confidence interval is the Woolf interval, and the p-value
+is a two-sided Fisher's exact test on the uncorrected counts. The negative
+likelihood ratio is `LR- = rate(PLP inside) / rate(BLB inside)`. Raw counts
+are written to `*_metrics.json`.
 
 ## 8. Determinism
 
-Nothing in the pipeline is stochastic. Parameters are estimated in closed form,
-Viterbi decoding is exact, and no bootstrap or permutation step is used, so
-there is no random seed.
-`tests/test_model.py::test_decoding_is_deterministic` and
-`tests/test_pipeline.py::test_two_runs_give_identical_files` assert this. Given
-identical input tables and config, two runs produce byte-identical interval and
-metrics files.
+Nothing in the pipeline is stochastic. Parameters are estimated in closed form
+and Viterbi decoding is exact, so there is no random seed. Given identical
+input and config, two runs produce byte-identical outputs
+(`tests/test_model.py::test_decoding_is_deterministic` and
+`tests/test_pipeline.py::test_two_runs_give_identical_files`).

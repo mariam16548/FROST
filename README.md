@@ -47,9 +47,8 @@ python -m coldspots.cli --config config/synthetic.yaml
 #    into data/, then:
 python -m coldspots.cli --config config/default.yaml
 
-# Optional: the ClinVar / MAVE enrichment analysis
+# Optional: also compute the ClinVar / MAVE odds ratios
 python -m coldspots.cli --config config/default.yaml --evaluate
-python -m coldspots.cli --config config/sensitivity_position_level.yaml
 ```
 
 Run the commands from the repository root: paths in the configs are relative
@@ -82,8 +81,6 @@ coldspots/
   cli.py          Command-line interface.
 config/
   default.yaml    The published primary analysis.
-  sensitivity_position_level.yaml
-                  Optional evaluation, counted per position.
   synthetic.yaml  Smoke test on synthetic data.
 scripts/
   make_synthetic_data.py
@@ -102,8 +99,8 @@ docs/
    per-residue scores are collapsed to one row per residue for training and
    detection.
 2. **Train.** For each feature, residues inside the labelled BRCA1 interval
-   (residues 224–1366) are treated as the cold state and the rest of the
-   protein as the hot state. Per-state means and variances, initial-state
+   (residues 224–1366) are treated as the Cold state and the rest of the
+   protein as the Not-Cold state. Per-state means and variances, initial-state
    probabilities, and Laplace-smoothed transition probabilities are computed
    directly from these labels. There is **no EM step**; `n_iter=0`.
 3. **Marginalise.** Genes with any missing EVE score are decoded with the
@@ -123,32 +120,19 @@ See [docs/METHODS.md](docs/METHODS.md) for the full description.
 
 ## Configuration
 
-Every parameter lives in a YAML file. To change the analysis, edit the config —
-not the code. The main knobs:
+`config/default.yaml` holds the manuscript's settings: the four features
+(AlphaMissense, ESM1b, EVE, phyloP), the BRCA1 training region 224–1366, and
+the 40-residue minimum cold-spot length. Leave them as they are to reproduce
+the published results.
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `data.variant_csv` | `data/variant_level_coldspots.csv.gz` | The input table |
-| `features.primary` | AlphaMissense, ESM1b, EVE, phyloP | Feature set; **order matters**, the first feature defines which state is cold |
-| `features.fallback_drop` | `[max_EVE]` | Marginalised out for genes with any missing value of these scores |
-| `training.intervals` | `BRCA1: [[224, 1366]]` | Labelled cold region(s) used for parameter estimation |
-| `training.exclude_genes` | `[BRCA1]` | Never decoded; removed from both evaluations |
-| `detection.min_cold_run` | `40` | Minimum cold-run span, in amino acids |
-| `evaluation.enabled` | `false` | Run the optional ClinVar / MAVE analysis (also `--evaluate`) |
-| `evaluation.min_mave_positions` | `10` | Distinct positions with an Abnormal/Normal MAVE call required |
-| `evaluation.mave_filter_level` | `gene` | `gene`: the 10 positions may be summed across a gene's cold spots; `interval`: each cold spot needs its own 10 |
-| `evaluation.unit` | `variant` | Counting unit for the enrichment tests |
-| `evaluation.min_class_count` | `0` | ClinVar gene filter; `0` disables it |
-| `evaluation.mave_labels` | `PLP: Abnormal, BLB: Normal, IR: Indeterminate` | How MAVE calls are worded in the table |
+Command-line options:
 
-Any of these can be overridden on the command line without editing the file:
-
-```bash
-python -m coldspots.cli --config config/default.yaml \
-    --unit position --mave-filter-level interval --out-dir results/sensitivity
-```
-
-`python -m coldspots.cli --help` lists all overrides.
+| Option | Meaning |
+| --- | --- |
+| `--config` | Configuration file (default `config/default.yaml`) |
+| `--variant-csv` | Path to the input table |
+| `--out-dir`, `--prefix` | Where to write the outputs |
+| `--evaluate` | Also compute the ClinVar / MAVE odds ratios |
 
 ---
 
@@ -162,15 +146,9 @@ Written to `output.dir`, prefixed with `output.prefix`:
 | `*_variants.csv.gz` | One row per input row: `transcript_id`, `gene_symbol`, `protein_variant`, `gene_has_coldspot`, `variant_in_coldspot` (empty for training genes) |
 | `*_manifest.json` | Git commit (marked `-dirty` if the code had uncommitted changes), config fingerprint, full resolved config, package versions, the fitted HMM parameters, and region counts |
 
-With `--evaluate`, also:
-
-| File | Contents |
-| --- | --- |
-| `*_regions_mave_filtered.csv` | Regions passing the MAVE support filter, with per-region assay counts and `frac_assayed` |
-| `*_metrics.json` | All reported statistics, including the raw 2×2 tables behind each odds ratio |
-
-`output.variant_table: false` skips the per-variant file; `output.write_pickle:
-true` adds a pickled bundle (not guaranteed to load across pandas versions).
+With `--evaluate`, also `*_metrics.json`: the ClinVar and MAVE odds ratios
+(95% CI, p-value), LR−, the 2×2 counts behind them, and the genes in the MAVE
+evaluation.
 
 ---
 
