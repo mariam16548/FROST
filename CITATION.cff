@@ -1,10 +1,10 @@
 cff-version: 1.2.0
-title: "Mutational cold-spot detection in disordered protein regions"
+title: "FROST: Find Regions Of Substitution Tolerance"
 message: "If you use this software, please cite both the software and the paper."
 type: software
 version: 1.0.0
 license: MIT
-repository-code: "https://github.com/TODO/TODO"
+repository-code: "https://github.com/mariam16548/FROST"
 authors:
   - family-names: TODO
     given-names: TODO
