@@ -1,0 +1,14 @@
+{
+  "title": "FROST: Find Regions Of Substitution Tolerance",
+  "upload_type": "software",
+  "description": "FROST finds coldspots: stretches of a protein where missense variants are rarely pathogenic. It combines four per-residue scores (AlphaMissense, ESM1b, EVE and phyloP) in a two-state hidden Markov model trained on the BRCA1 coldspot. Code for: Benazouz et al., Scalable identification of mutationally tolerant regions in 1,336 disease-associated genes (2026).",
+  "creators": [
+    {"name": "Benazouz, Mariam", "affiliation": "University of Washington"}
+  ],
+  "license": "MIT",
+  "version": "1.0.0",
+  "keywords": ["coldspots", "variant effect prediction", "hidden Markov model", "ClinVar", "MAVE"],
+  "related_identifiers": [
+    {"identifier": "10.5281/zenodo.24398228", "relation": "references", "resource_type": "dataset", "scheme": "doi"}
+  ]
+}
