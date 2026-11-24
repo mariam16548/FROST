@@ -3,6 +3,7 @@ title: "FROST: Find Regions Of Substitution Tolerance"
 message: "If you use this software, please cite the paper."
 type: software
 version: 1.0.0
+doi: 10.5281/zenodo.24490373
 license: MIT
 repository-code: "https://github.com/mariam16548/FROST"
 authors:

@@ -1,5 +1,7 @@
 # FROST: Find Regions Of Substitution Tolerance
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24490373.svg)](https://doi.org/10.5281/zenodo.24490373)
+
 FROST finds **coldspots**: stretches of a protein where missense variants are
 rarely pathogenic. It combines four per-residue scores (AlphaMissense, ESM1b,
 EVE and phyloP) in a two-state hidden Markov model trained once on the known
@@ -10,6 +12,9 @@ This is the code for:
 > Benazouz M, Fayer S, McEwen AE, Stone J, Gupta P, Rubin AF, Mooney SD,
 > Fowler DM, Radivojac P, Starita LM. *Scalable identification of mutationally
 > tolerant regions in 1,336 disease-associated genes.* (2026)
+
+To cite the code itself, use
+[doi:10.5281/zenodo.24490373](https://doi.org/10.5281/zenodo.24490373).
 
 ## Install
 
